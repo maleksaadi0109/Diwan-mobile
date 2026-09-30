@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "diwan-worker"
+version = "0.1.0"
+description = "Diwan Arabic Poetry Audio Processing & ASR Worker"
+requires-python = ">=3.13"
+dependencies = [
+    "faster-whisper>=1.2.1",
+    "yt-dlp>=2026.8.19",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["diwan_worker*"]

@@ -1,0 +1,11 @@
+# Diwan on Replit
+
+This workspace contains the **Diwan mobile app** (`artifacts/mobile`) and its audio API (`artifacts/api-server`). The desktop app was removed to keep the publishing image below Replit's size limit.
+
+Use the managed mobile and API workflows below for development. Install JavaScript dependencies from the repository root with `pnpm install --frozen-lockfile` (not npm). Python dependencies are locked in `uv.lock`; if needed, restore them with `uv sync --python 3.13 --frozen`. FFmpeg is listed in `.replit`.
+
+## Mobile and Python processing
+
+The existing Expo app (`artifacts/mobile`) uses the managed `artifacts/mobile: expo` workflow. Its API is the managed `artifacts/api-server: API Server` workflow on port 8080; run both for mobile imports. The API spawns its Python worker (`artifacts/api-server/worker/diwan_worker`) for audio downloads and alignment; the API build installs worker dependencies from `artifacts/api-server/worker/pyproject.toml`, while the root Python environment remains managed by `uv.lock`. FFmpeg is configured in `.replit`. Restore the Python environment with `uv sync --python 3.13 --frozen` if dependencies are absent. `/api/healthz` checks HTTP server availability, not the worker.
+
+The mobile import flow sends audio to the API temporarily for conversion and alignment, then downloads playback audio into app document storage on native phones **before saving the poem**. Saved poems, playlists, and settings still use device-local AsyncStorage. Mobile `.diwan` backup archives include audio, while legacy settings JSON backups do not. The user chose phone-only storage, not cloud storage: server jobs are temporary, and new mobile server-side converted audio is removed after 24 hours (legacy unmarked files are left alone). Unfinished imports may need restarting after a server restart/deployment. Keep downloaded audio on the phone; do not add App Storage without a new request. The API has no user authentication; its public audio-processing endpoints use rate and concurrency limits, but availability and operating costs should still be monitored. Browser-based Expo preview does not provide native offline file caching.
