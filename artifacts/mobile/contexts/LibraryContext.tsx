@@ -8,17 +8,21 @@ import React, {
   useState,
 } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { createPoemRemoval } from '@/lib/poemDeletion';
 import { SAMPLE_CATALOG_IDS, seedSamplePoems } from '@/lib/samplePoems';
 import { attachSampleAudio, hasPoemAudio, isSampleCatalogId, type SampleAudioStatus } from '@/lib/sampleAudio';
 import { AudioServerBusyError, cacheSampleTransfer, clearSampleTransfer, markSampleCaching, prepareSampleTransfer, readSampleTransfer } from '@/lib/sampleTransfer';
 import { extractErrorMessage, toPlayableAudioUrl } from '@/lib/api';
+import { downloadYoutubeAudioOnDevice, deleteDeviceYoutubeRecording, usesDeviceYoutubeDownloads, createDeviceYoutubeRecordingId, listDeviceYoutubeOperations, cancelDeviceYoutubeOperation, acknowledgeDeviceYoutubeRecording } from '@/lib/deviceYoutube';
+import { createDeviceIntentStore, createDeviceDownloadManager, type DeviceDownloadRecovery, type DeviceImportParams } from '@/lib/deviceDownloadIntents';
+import { POEM_CATALOG, CATALOG_RECITERS } from '@/lib/readyCatalog';
 import { usePlaylists } from '@/contexts/PlaylistsContext';
-import type { Poem } from '@/lib/types';
+import type { Poem, Recording } from '@/lib/types';
 
 const STORAGE_KEY = 'diwan.mobile.poems.v1';
+const deviceIntentStore = createDeviceIntentStore(AsyncStorage);
 
 interface LibraryContextValue {
   poems: Poem[];
@@ -30,6 +34,12 @@ interface LibraryContextValue {
   updatePoem: (id: string, updater: (poem: Poem) => Poem) => Promise<void>;
   sampleAudioStatus: Record<string, SampleAudioStatus>;
   retrySampleAudio: (catalogId: string, manual?: boolean) => Promise<void>;
+  cancelSampleAudio: (catalogId: string) => void;
+  importDevicePoem: (params: DeviceImportParams) => Promise<{ poemId: string; recording: Recording }>;
+  deviceDownloadRecoveries: DeviceDownloadRecovery[];
+  retryDeviceDownload: (id: string) => Promise<void>;
+  cancelDeviceDownload: (id: string) => Promise<void>;
+  dismissDeviceDownload: (id: string) => Promise<void>;
 }
 
 const LibraryContext = createContext<LibraryContextValue | undefined>(
@@ -49,6 +59,7 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [samplesSeeded, setSamplesSeeded] = useState(false);
   const [sampleAudioStatus, setSampleAudioStatus] = useState<Record<string, SampleAudioStatus>>({});
+  const [deviceDownloadRecoveries, setDeviceDownloadRecoveries] = useState<DeviceDownloadRecovery[]>([]);
 
   useEffect(() => {
     let mounted = true;
@@ -95,6 +106,79 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
     },
     [],
   );
+
+  const deviceManager = useMemo(() => createDeviceDownloadManager({
+    store: deviceIntentStore,
+    createId: createDeviceYoutubeRecordingId,
+    active: () => AppState.currentState === 'active',
+    poems: () => poemsRef.current,
+    updatePoems: async (updater) => {
+      await initialLoad.current;
+      if (!initialReadSucceeded.current) throw new Error('تعذر قراءة المكتبة؛ لم يُحفظ أو يُحذف التسجيل.');
+      await updatePoems(updater);
+    },
+    list: listDeviceYoutubeOperations,
+    download: downloadYoutubeAudioOnDevice,
+    cancel: cancelDeviceYoutubeOperation,
+    acknowledge: acknowledgeDeviceYoutubeRecording,
+    discard: deleteDeviceYoutubeRecording,
+    status: (intent, status) => {
+      if (intent.catalogId) {
+        const catalogId = intent.catalogId;
+        setSampleAudioStatus((prev) => ({
+          ...prev, [catalogId]: status
+            ? { phase: status.state === 'running' ? 'downloading' : 'error', progress: status.progress, message: status.message }
+            : { phase: poemsRef.current.some((poem) => poem.id === intent.existingPoemId && hasPoemAudio(poem)) ? 'ready' : 'error',
+              message: 'تم إلغاء تنزيل الصوت.' },
+        }));
+      } else {
+        setDeviceDownloadRecoveries((prev) => [
+          ...prev.filter((item) => item.id !== intent.id), ...(status ? [status] : []),
+        ]);
+      }
+    },
+  }), [updatePoems]);
+  const importDevicePoem = useCallback(async (params: DeviceImportParams) => {
+    await initialLoad.current;
+    if (!initialReadSucceeded.current) throw new Error('تعذر قراءة المكتبة؛ أعد فتح التطبيق قبل التنزيل.');
+    return deviceManager.start(params);
+  }, [deviceManager]);
+  const retryDeviceDownload = useCallback(async (id: string) => {
+    if (id === 'recovery-storage-error') {
+      await deviceManager.recover();
+      setDeviceDownloadRecoveries((prev) => prev.filter((item) => item.id !== id));
+    } else {
+      await deviceManager.retry(id);
+    }
+  }, [deviceManager]);
+  const cancelDeviceDownload = useCallback(async (id: string) => {
+    await deviceManager.cancel(id);
+    setDeviceDownloadRecoveries((prev) => prev.filter((item) => item.id !== id));
+  }, [deviceManager]);
+  const dismissDeviceDownload = cancelDeviceDownload;
+  const cancelSampleAudio = useCallback((catalogId: string) => {
+    void deviceManager.intents().then(async (intents) => {
+      const intent = intents.find((item) => item.catalogId === catalogId);
+      if (intent) await deviceManager.cancel(intent.id);
+    }).catch((error) => setSampleAudioStatus((prev) => ({
+      ...prev, [catalogId]: { phase: 'error', message: extractErrorMessage(error, 'تعذر إلغاء التنزيل.') },
+    })));
+  }, [deviceManager]);
+
+  useEffect(() => {
+    if (isLoading || !initialReadSucceeded.current || !usesDeviceYoutubeDownloads()) return;
+    const recover = () => {
+      void deviceManager.recover().catch((error) => {
+        setDeviceDownloadRecoveries((prev) => [...prev.filter((item) => item.id !== 'recovery-storage-error'), {
+          id: 'recovery-storage-error', title: 'تنزيلات الصوت', state: 'error',
+          message: extractErrorMessage(error, 'تعذر قراءة سجل التنزيلات. أعد فتح التطبيق للمحاولة.'),
+        }]);
+      });
+    };
+    recover();
+    const subscription = AppState.addEventListener('change', (state) => { if (state === 'active') recover(); });
+    return () => subscription.remove();
+  }, [isLoading, deviceManager]);
 
   const addPoem = useCallback(
     async (poem: Poem) => {
@@ -151,9 +235,26 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
     if (Platform.OS === 'web') return;
     const getCurrentPoem = () => poemsRef.current.find((poem) => poem.id === `sample-${catalogId}`);
     const current = getCurrentPoem();
-    if (!current || hasPoemAudio(current)) return;
+    if (!usesDeviceYoutubeDownloads() && (!current || hasPoemAudio(current))) return;
     audioRunning.current.add(catalogId);
     try {
+      if (usesDeviceYoutubeDownloads()) {
+        const intent = (await deviceManager.intents()).find((item) => item.catalogId === catalogId);
+        if (intent) {
+          if (manual) await deviceManager.retry(intent.id);
+          // Root recovery owns existing operations. Never restart missing/interrupted ones automatically.
+          return;
+        }
+        if (!current || hasPoemAudio(current)) return;
+        if (AppState.currentState !== 'active') return;
+        const entry = POEM_CATALOG.find((item) => item.id === catalogId)!;
+        if (current.externalId !== entry.mizanPoemId) return;
+        await deviceManager.start({
+          url: entry.youtubeUrl, poem: current, existingPoemId: current.id,
+          reciter: CATALOG_RECITERS[entry.reciterId]?.name,
+        }, catalogId);
+        return;
+      }
       const previous = await readSampleTransfer(catalogId);
       let locallyCompleted = false;
       // An iOS background task may still own its staging file after process
@@ -213,7 +314,7 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
         return next;
       });
     } catch (error) {
-      const persisted = await readSampleTransfer(catalogId).catch(() => null);
+      const persisted = usesDeviceYoutubeDownloads() ? null : await readSampleTransfer(catalogId).catch(() => null);
       setSampleAudioStatus((prev) => ({
         ...prev,
         [catalogId]: {
@@ -224,7 +325,7 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
     } finally {
       audioRunning.current.delete(catalogId);
     }
-  }, [updatePoem]);
+  }, [updatePoem, deviceManager]);
 
   useEffect(() => {
     if (isLoading || !initialReadSucceeded.current || sampleSeedStarted.current) return;
@@ -251,9 +352,25 @@ export function LibraryProvider({ children }: { children: React.ReactNode }) {
     })();
   }, [samplesSeeded, retrySampleAudio]);
 
+  useEffect(() => {
+    if (!samplesSeeded || !usesDeviceYoutubeDownloads()) return;
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      void (async () => {
+        for (const id of SAMPLE_CATALOG_IDS) {
+          if (AppState.currentState !== 'active') break;
+          await retrySampleAudio(id, false);
+        }
+      })();
+    });
+    return () => subscription.remove();
+  }, [samplesSeeded, retrySampleAudio]);
+
   const value = useMemo(
-    () => ({ poems, isLoading, addPoem, removePoem, removePoems, getPoem, updatePoem, sampleAudioStatus, retrySampleAudio }),
-    [poems, isLoading, addPoem, removePoem, removePoems, getPoem, updatePoem, sampleAudioStatus, retrySampleAudio],
+    () => ({ poems, isLoading, addPoem, removePoem, removePoems, getPoem, updatePoem, sampleAudioStatus, retrySampleAudio, cancelSampleAudio,
+      importDevicePoem, deviceDownloadRecoveries, retryDeviceDownload, cancelDeviceDownload, dismissDeviceDownload }),
+    [poems, isLoading, addPoem, removePoem, removePoems, getPoem, updatePoem, sampleAudioStatus, retrySampleAudio, cancelSampleAudio,
+      importDevicePoem, deviceDownloadRecoveries, retryDeviceDownload, cancelDeviceDownload, dismissDeviceDownload],
   );
 
   return (

@@ -34,7 +34,7 @@ export default function CatalogScreen() {
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { poems, isLoading, sampleAudioStatus, retrySampleAudio } = useLibrary();
+  const { poems, isLoading, sampleAudioStatus, retrySampleAudio, cancelSampleAudio } = useLibrary();
   const { activePoem } = useGlobalAudioPlayer();
   const [query, setQuery] = useState('');
   const [selectedReciter, setSelectedReciter] = useState<string | null>(null);
@@ -250,8 +250,9 @@ export default function CatalogScreen() {
                   const samplePhase = savedPoem?.id === `sample-${entry.id}` && !hasAudio
                     ? sampleAudioStatus[entry.id]?.phase
                     : undefined;
-                  const autoBusy = samplePhase === 'downloading' || samplePhase === 'saving';
-                  const autoFailed = samplePhase === 'error' && Platform.OS !== 'web';
+                   const autoBusy = samplePhase === 'downloading' || samplePhase === 'saving' || samplePhase === 'resuming';
+                   const canCancel = autoBusy && Platform.OS === 'android';
+                   const autoFailed = (samplePhase === 'error' || samplePhase === 'interrupted') && Platform.OS !== 'web';
                   const thumbnail = getSampleThumbnailSource(entry.id);
                   return (
                     <View
@@ -280,17 +281,23 @@ export default function CatalogScreen() {
                           <Text style={[styles.poetName, { color: colors.mutedForeground }]} numberOfLines={1}>
                             {entry.poetHint}
                           </Text>
+                           {autoFailed && sampleAudioStatus[entry.id]?.message ? (
+                             <Text style={[styles.poetName, { color: colors.mutedForeground }]}>
+                               {sampleAudioStatus[entry.id].message}
+                             </Text>
+                           ) : null}
                         </View>
                       </Pressable>
                       <Pressable
                         onPress={() => {
-                          if (autoFailed) void retrySampleAudio(entry.id);
+                           if (canCancel) cancelSampleAudio(entry.id);
+                           else if (autoFailed) void retrySampleAudio(entry.id);
                           else openEntry(entry, true);
                         }}
-                        disabled={autoBusy}
-                        accessibilityState={{ disabled: autoBusy }}
+                         disabled={autoBusy && !canCancel}
+                         accessibilityState={{ disabled: autoBusy && !canCancel }}
                         accessibilityRole="button"
-                        accessibilityLabel={autoBusy ? `جارٍ تنزيل صوت ${entry.titleHint}` : autoFailed ? `إعادة تنزيل صوت ${entry.titleHint}` : hasAudio ? `افتح ${entry.titleHint}` : imported ? `نزّل صوت ${entry.titleHint}` : `نزّل ${entry.titleHint} إلى ديوانك`}
+                         accessibilityLabel={canCancel ? `إلغاء تنزيل صوت ${entry.titleHint}` : autoBusy ? `جارٍ تنزيل صوت ${entry.titleHint}` : autoFailed ? `إعادة تنزيل صوت ${entry.titleHint}` : hasAudio ? `افتح ${entry.titleHint}` : imported ? `نزّل صوت ${entry.titleHint}` : `نزّل ${entry.titleHint} إلى ديوانك`}
                         hitSlop={4}
                         style={({ pressed }) => [styles.entryAction, {
                           backgroundColor: hasAudio ? colors.secondary : colors.primary,
@@ -298,9 +305,9 @@ export default function CatalogScreen() {
                         }]}
                         testID={`catalog-download-${entry.id}`}
                       >
-                        <Feather name={hasAudio ? 'check' : autoBusy ? 'clock' : autoFailed ? 'rotate-cw' : 'download'} size={16} color={hasAudio ? colors.primary : colors.primaryForeground} />
+                         <Feather name={hasAudio ? 'check' : canCancel ? 'x' : autoBusy ? 'clock' : autoFailed ? 'rotate-cw' : 'download'} size={16} color={hasAudio ? colors.primary : colors.primaryForeground} />
                         <Text style={[styles.entryActionLabel, { color: hasAudio ? colors.primary : colors.primaryForeground }]}>
-                          {hasAudio ? 'في ديوانك' : autoBusy ? 'جارٍ التنزيل' : autoFailed ? 'إعادة المحاولة' : imported ? 'تنزيل الصوت' : 'تنزيل'}
+                           {hasAudio ? 'في ديوانك' : canCancel ? `إلغاء ${Math.round((sampleAudioStatus[entry.id]?.progress ?? 0) * 100)}٪` : autoBusy ? 'جارٍ التنزيل' : autoFailed ? 'إعادة المحاولة' : imported ? 'تنزيل الصوت' : 'تنزيل'}
                         </Text>
                       </Pressable>
                     </View>

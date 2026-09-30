@@ -37,7 +37,7 @@ export default function PoemPlayerScreen() {
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { getPoem, removePoem, updatePoem, sampleAudioStatus, retrySampleAudio } = useLibrary();
+  const { getPoem, removePoem, updatePoem, sampleAudioStatus, retrySampleAudio, cancelSampleAudio } = useLibrary();
   const { playlists, createPlaylist, addPoemToPlaylist, removePoemFromPlaylist } =
     usePlaylists();
   const { fontSize, setFontSize } = useSettings();
@@ -84,7 +84,8 @@ export default function PoemPlayerScreen() {
   const sampleAudioPhase = readyEntry && poem?.id === `sample-${readyEntry.id}`
     ? sampleAudioStatus[readyEntry.id]?.phase
     : undefined;
-  const sampleAudioBusy = sampleAudioPhase === 'downloading' || sampleAudioPhase === 'saving';
+  const sampleAudioBusy = sampleAudioPhase === 'downloading' || sampleAudioPhase === 'saving' || sampleAudioPhase === 'resuming';
+  const canCancelSample = sampleAudioBusy && Platform.OS === 'android';
   const timingVerse = poem?.verses.find((v) => v.id === timingVerseId);
   const infoVerse = poem?.verses.find((verse) => verse.id === infoVerseId) ?? null;
   const hasMizanVerseId = (verse: Verse) =>
@@ -545,12 +546,14 @@ export default function PoemPlayerScreen() {
         {readyEntry ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={sampleAudioBusy ? 'جارٍ تنزيل صوت القارئ' : 'تنزيل صوت القارئ'}
-            accessibilityState={{ disabled: sampleAudioBusy }}
-            disabled={sampleAudioBusy}
+            accessibilityLabel={canCancelSample ? 'إلغاء تنزيل صوت القارئ' : sampleAudioBusy ? 'جارٍ تنزيل صوت القارئ' : 'تنزيل صوت القارئ'}
+            accessibilityState={{ disabled: sampleAudioBusy && !canCancelSample }}
+            disabled={sampleAudioBusy && !canCancelSample}
             testID="player-download-reader-audio"
             onPress={() => {
-              if (sampleAudioPhase === 'error' && Platform.OS !== 'web') {
+              if (canCancelSample) {
+                cancelSampleAudio(readyEntry.id);
+              } else if ((sampleAudioPhase === 'error' || sampleAudioPhase === 'interrupted') && Platform.OS !== 'web') {
                 void retrySampleAudio(readyEntry.id);
               } else {
                 router.push({
@@ -565,12 +568,17 @@ export default function PoemPlayerScreen() {
               opacity: pressed ? 0.7 : 1,
             }]}
           >
-            <Feather name={sampleAudioBusy ? 'clock' : sampleAudioPhase === 'error' ? 'rotate-cw' : 'download'} size={16} color={colors.primary} />
+            <Feather name={canCancelSample ? 'x' : sampleAudioBusy ? 'clock' : sampleAudioPhase === 'error' ? 'rotate-cw' : 'download'} size={16} color={colors.primary} />
             <Text style={[styles.downloadAudioText, { color: colors.primary }]}>
-              {sampleAudioBusy ? 'جارٍ تنزيل صوت القارئ' : sampleAudioPhase === 'error' ? 'إعادة تنزيل الصوت' : 'تنزيل صوت القارئ'}
+              {canCancelSample ? `إلغاء التنزيل ${Math.round((sampleAudioStatus[readyEntry.id]?.progress ?? 0) * 100)}٪` : sampleAudioBusy ? 'جارٍ تنزيل صوت القارئ' : sampleAudioPhase === 'error' ? 'إعادة تنزيل الصوت' : 'تنزيل صوت القارئ'}
             </Text>
           </Pressable>
         ) : null}
+         {readyEntry && (sampleAudioPhase === 'error' || sampleAudioPhase === 'interrupted') ? (
+           <Text style={{ color: colors.mutedForeground, fontFamily: 'Cairo_400Regular', textAlign: 'right' }}>
+             {sampleAudioStatus[readyEntry.id]?.message}
+           </Text>
+         ) : null}
         <Pressable onPress={openRecordings} accessibilityRole="button"
           accessibilityLabel="اختيار وإضافة التسجيلات" testID="player-recordings"
           style={{ padding: 8 }}>

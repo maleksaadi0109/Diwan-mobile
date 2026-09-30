@@ -9,7 +9,7 @@ import { Platform } from 'react-native';
 export function apiDomain(): string {
   const domain = process.env.EXPO_PUBLIC_DOMAIN;
   if (!domain) {
-    throw new Error('EXPO_PUBLIC_DOMAIN is not set');
+    throw new Error('خدمة المعالجة والمزامنة تحتاج عنوان خادم منشورًا في إعدادات هذه النسخة. تنزيل يوتيوب المباشر على أندرويد لا يحتاجه.');
   }
   return domain;
 }

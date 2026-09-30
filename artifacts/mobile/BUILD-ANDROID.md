@@ -1,36 +1,116 @@
 # Installable Android build
 
-The Replit web/mobile preview is **not** an APK. This project uses a cloud API
-for YouTube audio. Bundled poem text and thumbnails work offline, but a new
-install needs the published API to fetch and cache sample recordings.
+The Replit web/mobile preview is **not** an APK. Android now downloads YouTube
+audio **on the device** using a local native module, including the three sample
+voices and catalog/Mizan YouTube imports. The MP3 is saved privately for offline
+playback. No Diwan API is contacted by this download path. Internet access to
+YouTube is still required for the first download; permission to save/distribute
+the recording is required. YouTube may restrict individual videos.
 
-1. Publish the project with **Public** access so its API Server is reachable
-   from another person's phone. A private deployment will not work inside an
-   APK. Verify
+This native component cannot run in Expo Go or the web preview. Build a new APK
+from the updated source; publishing the API alone does not update an installed APK.
+The native library includes Python, FFmpeg and QuickJS and increases APK size.
+Before the first download (then at most daily), it checks and installs the upstream
+stable yt-dlp engine through GitHub. This needs internet access to GitHub but not
+the Diwan API. If engine preparation fails, the app reports it instead of silently
+using the obsolete bundled extractor or falling back to the server. Cancellation
+may wait for an in-flight engine update to finish. See the module README for
+upstream updater timeout and integrity limitations.
+See `modules/diwan-downloader/README.md` for pinned versions and native limitations.
+Start downloads while the app is visible. The Android foreground service then
+owns the transfer when the screen is locked or the import page is closed, with a
+progress notification and Cancel action. Android 13+ asks for notification
+permission; denial does not prevent the service, but hides its notification from
+the notification drawer. In-app cancellation remains available. No battery-policy
+exemption is requested. OEM restrictions, force-stop and Android service time
+limits can still interrupt work. Transfers are limited to one hour of audio,
+120 MiB and an eight-minute service lifetime, one at a time.
+
+The native journal and a separate saved import/sample intent recover completed
+files after an app restart. Incomplete transfers are reported as interrupted,
+not silently restarted. Manual retry uses a fresh operation; saving a recovered
+completion never overwrites another recording or recreates a deleted target.
+Failed library saves retain the completed download for retry. Optional server
+alignment is not automatically resumed after process restart. See the verification
+checklist below: these native lifecycle guarantees still require device testing.
+
+Run `pnpm install --frozen-lockfile` from the repository root before EAS commands.
+
+1. **Optional for Android downloads:** publish the project with **Public** access so its API Server is reachable
+   from another person's phone if you want automatic verse alignment or the existing
+   server-based upload/record processing. A private deployment will not work inside an APK. Verify
    `https://<published-host>/api/healthz`, and separately verify a sample audio
    download (the health endpoint does not test Python, yt-dlp or FFmpeg).
    Obtain the actual published URL from Replit's Publish view; **never** use
    `REPLIT_DEV_DOMAIN` or an Expo development URL in a distributed APK.
-2. From `artifacts/mobile`, sign in with your own Expo account using
-   `pnpm dlx eas-cli@latest login`, then run
-   `pnpm dlx eas-cli@latest build:configure` to link this app to an Expo project
-   and let Expo manage its Android signing key. Keep the checked-in `preview`
-   build profile in `eas.json`.
-3. Set `EXPO_PUBLIC_DOMAIN` in the **preview** EAS environment to the published
+2. This app is linked to the existing `@malek20050109/mobile` Expo project.
+   From `artifacts/mobile`, sign in to an account with access using
+   `pnpm dlx eas-cli@latest login` if using the CLI. Reuse that project's
+   existing Android signing key; do not initialize a different project.
+   Keep the checked-in `preview` build profile in `eas.json`.
+3. If using the optional API, set `EXPO_PUBLIC_DOMAIN` in the **preview** EAS environment to the published
    hostname only (e.g. `example.replit.app`, **without** `https://`):
-   `pnpm dlx eas-cli@latest env:create --environment preview --name EXPO_PUBLIC_DOMAIN --value <published-host> --visibility plaintext`.
+   `pnpm dlx eas-cli@latest env:set --environment preview --name EXPO_PUBLIC_DOMAIN --value <published-host> --visibility plaintext`.
    This value is public and is embedded in the APK. The build deliberately fails
-   if it is missing or points at a temporary development URL.
+   if it is supplied but invalid or points at a temporary development URL.
 4. Run `pnpm dlx eas-cli@latest build --platform android --profile preview`
    from `artifacts/mobile`. EAS provides a download link for the signed `.apk`.
    This `preview` build is standalone; it does not require Expo Go or Metro.
 5. Install the APK on an Android phone using the EAS link, allowing installation
    from the phone's browser/files app if prompted. Open with internet access,
    wait for the three sample voices to download, play them, then try playback
-   offline. Test this on a different phone/network before sharing the link.
+   offline. Also test a catalog import with automatic alignment OFF while the Diwan
+   API is unavailable: it must download/save/play without that API. Test progress,
+   cancellation, login-restricted videos, lack of storage, and retaining existing
+   recordings on a real Android phone/tablet before sharing. The optional alignment
+   switch uploads the already-downloaded MP3 to the API; an alignment failure
+   retains the saved local recording.
 
 Keep the same Android package name and Expo signing key for future updates.
 Publishing Replit again does **not** update an APK already on someone's phone;
 rebuild and share a new APK after mobile code changes. A published, publicly
 reachable API can receive requests from other internet users, so review its
 access controls and usage before broad distribution.
+
+## Foreground-download verification (required before release)
+
+The workspace JS tests and typecheck pass, but this change has **not** been
+compiled or exercised on an Android device in this environment. It currently has
+no JDK, Android SDK, Gradle/adb or connected Android device. Expo project
+association is configured for cloud builds. Web preview/Expo Go cannot verify this
+native module. Do not treat the checklist below as a record of successful tests.
+
+After linking EAS and building the `preview` APK, or using a local JDK/Android SDK
+with `pnpm exec expo prebuild --platform android` and `./gradlew :app:assembleDebug`:
+
+1. Verify autolinking includes `diwan-downloader`, and the merged manifest contains
+   the non-exported `DownloadService`, `dataSync` type, foreground/data-sync,
+   wake-lock and notification permissions. compileSdk must be at least 35.
+2. Install on a physical Android device (include Android 13, 14 and 15+ coverage).
+   Test granting and denying notifications, starting in the foreground, and
+   rejecting new starts after backgrounding. With a public permitted video, lock
+   the screen and leave the import page; confirm one transfer, notification
+   progress and eventual offline playback after returning. Test all sample voices
+   and a catalog/Mizan import without access to the Diwan API.
+3. Cancel in the notification and in the recovered import/sample UI during engine
+   preparation, transfer, conversion and completion. Confirm no partial staging
+   files remain after worker termination, or that cleanup failures stay visible
+   and can be retried. Confirm an already saved recording survives repeated cancel.
+4. Kill the app process in a debuggable test build while a transfer is running,
+   relaunch and confirm an interrupted operation with manual retry, not a
+   duplicate worker. Separately force-stop/reboot: continuation is **not** promised.
+   Kill after publication but before library save; confirm one completed file is
+   adopted on relaunch. Kill after save but before acknowledgement; confirm the
+   recording is retained and not attached twice or discarded.
+5. While downloading, delete/edit the target poem or add another recording.
+   Verify no resurrection/overwrite and cleanup of only the unowned new file.
+   Simulate library/journal write failure and low storage: completed files remain
+   recoverable and saved recordings are never deleted by cleanup.
+6. Test battery-saver/OEM background restrictions and network loss. On Android 15+
+   exercise `dataSync` timeout behavior (use the OS test controls or a short test
+   timeout in a test build); confirm service/wake lock end, an actionable error,
+   and no new background service starts.
+7. In a local debuggable build run
+   `./gradlew :diwan-downloader:connectedDebugAndroidTest` for the journal,
+   publication-witness, cancellation-cleanup and no-overwrite instrumentation
+   tests. These supplement, not replace, the real YouTube/lifecycle checks.

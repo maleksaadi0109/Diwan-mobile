@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -51,9 +52,17 @@ import {
   parseMizanPoem,
   type ParsedMizanPoem,
 } from '@/lib/mizan';
+import {
+  getYoutubeThumbnail,
+  usesDeviceYoutubeDownloads,
+} from '@/lib/deviceYoutube';
+import { fetchMizanPoemOnDevice } from '@/lib/localYoutubeImport';
 
 type CatalogItemStatus = 'idle' | 'text' | 'downloading' | 'aligning' | 'caching' | 'error';
 type MizanAudioMode = 'none' | 'youtube' | 'upload' | 'record';
+// An explicit opt-in survives navigation to/from the catalog, but resets
+// to OFF on every fresh app launch.
+let deviceYoutubeAlignmentPreference = false;
 
 interface PickedAudioFile {
   uri: string;
@@ -89,7 +98,11 @@ export default function ImportScreen() {
   }>();
   const lastCatalogRequest = useRef<string | null>(null);
   const insets = useSafeAreaInsets();
-  const { addPoem, updatePoem, poems, isLoading: libraryLoading } = useLibrary();
+  const {
+    addPoem, updatePoem, poems, isLoading: libraryLoading,
+    importDevicePoem, deviceDownloadRecoveries, retryDeviceDownload,
+    cancelDeviceDownload: cancelRecoveredDownload, dismissDeviceDownload,
+  } = useLibrary();
 
   const [error, setError] = useState<string | null>(null);
 
@@ -113,6 +126,13 @@ export default function ImportScreen() {
     'idle' | 'downloading' | 'aligning' | 'caching'
   >('idle');
   const [alignProgress, setAlignProgress] = useState<number | null>(null);
+  const [deviceYoutubeAlign, setDeviceYoutubeAlign] = useState(deviceYoutubeAlignmentPreference);
+  const [deviceDownloadProgress, setDeviceDownloadProgress] = useState<number | null>(null);
+  const deviceOperation = useRef<AbortController | null>(null);
+  const deviceBusy = useRef(false);
+  const deviceDownloadActive = useRef(false);
+  const deviceCancelled = useRef(false);
+  const screenMounted = useRef(true);
 
   const [mizanAudioMode, setMizanAudioMode] = useState<MizanAudioMode>('none');
   const [mizanYoutubeUrl, setMizanYoutubeUrl] = useState('');
@@ -131,6 +151,125 @@ export default function ImportScreen() {
   const downloadMutation = useDownloadYoutubeAudio({
     request: { headers: { 'X-Diwan-Temporary-Audio': '1' } },
   });
+
+  useEffect(() => {
+    screenMounted.current = true;
+    return () => {
+      screenMounted.current = false;
+      // The service and durable library intent, not this screen, own the transfer.
+    };
+  }, []);
+
+  const cancelDeviceDownload = () => {
+    if (!deviceDownloadActive.current) return;
+    deviceCancelled.current = true;
+    deviceOperation.current?.abort();
+  };
+
+  const fetchPoemText = (id: string) =>
+    usesDeviceYoutubeDownloads() ? fetchMizanPoemOnDevice(id) : fetchMizanPoem(id);
+
+  // This operation owns only the newly created download. Existing poem/recording
+  // data is never replaced; alignment updates timing only after local persistence.
+  const importDeviceYoutube = async (params: {
+    url: string;
+    poem: Poem;
+    existing?: Poem;
+    reciter?: string;
+    onSave?: () => void;
+    onAlign?: () => void;
+  }): Promise<string> => {
+    if (deviceBusy.current) throw new Error('انتظر انتهاء تنزيل الصوت الحالي أولاً');
+    deviceBusy.current = true;
+    deviceDownloadActive.current = true;
+    deviceCancelled.current = false;
+    const controller = new AbortController();
+    deviceOperation.current = controller;
+    try {
+      const url = params.url.trim();
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(url);
+      } catch {
+        throw new Error('يرجى إدخال رابط يوتيوب صحيح');
+      }
+      if (
+        parsedUrl.protocol !== 'https:' ||
+        !['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtu.be'].includes(parsedUrl.hostname.toLowerCase())
+      ) throw new Error('يرجى إدخال رابط يوتيوب صحيح');
+      const { poemId: savedId, recording: localRecording } = await importDevicePoem({
+        url,
+        poem: { ...params.poem, coverImageUrl: getYoutubeThumbnail(url) || params.poem.coverImageUrl },
+        existingPoemId: params.existing?.id,
+        reciter: params.reciter,
+        signal: controller.signal,
+        onProgress: (fraction: number) => {
+          if (screenMounted.current && !controller.signal.aborted) {
+            setDeviceDownloadProgress(Math.max(0, Math.min(1, fraction)));
+          }
+        },
+      });
+      deviceDownloadActive.current = false;
+      if (screenMounted.current) params.onSave?.();
+      const poem: Poem = {
+        ...params.poem,
+        coverImageUrl: getYoutubeThumbnail(url) || params.poem.coverImageUrl,
+        recording: localRecording,
+      };
+      // Alignment is optional and is the only Android YouTube path to our server.
+      // The MP3 is already retained by the poem even if upload/alignment fails.
+      if (deviceYoutubeAlign && !controller.signal.aborted && screenMounted.current) {
+        try {
+          params.onAlign?.();
+          setMizanImportStage('aligning');
+          setAlignProgress(null);
+          const job = await uploadAudioFile({
+            uri: localRecording.audioUrl,
+            fileName: 'recitation.mp3',
+            mimeType: 'audio/mpeg',
+          });
+          if (!controller.signal.aborted && screenMounted.current) {
+            const alignment = await alignPoemInBackground({
+              audio_path: job.processing_audio_path,
+              verses: poem.verses.map((v) => ({ id: v.id, text: v.text })),
+              poem_id: savedId,
+              recording_id: localRecording.id,
+            }, (progress) => {
+              if (screenMounted.current) setAlignProgress(typeof progress === 'number' ? progress : null);
+            });
+            if (!controller.signal.aborted && screenMounted.current) {
+              const aligned = new Map(alignment.alignments.map((a) => [a.verse_id, a]));
+              await updatePoem(savedId, (current) => {
+                if (current.recording?.id !== localRecording.id || controller.signal.aborted) return current;
+                return {
+                  ...current,
+                  verses: current.verses.map((verse) => {
+                    const original = poem.verses.find((v) => v.id === verse.id);
+                    const timing = aligned.get(verse.id);
+                    return original?.text === verse.text && timing
+                      ? { ...verse, alignment: { startMs: timing.start_ms, endMs: timing.end_ms, confidence: timing.confidence } }
+                      : verse;
+                  }),
+                };
+              });
+            }
+          }
+        } catch (err) {
+          throw new Error(`حُفظت القصيدة والصوت على جهازك، لكن تعذرت مزامنة الأبيات عبر الخادم: ${extractErrorMessage(err, 'تحقق من الاتصال')}`);
+        }
+      }
+      return savedId;
+    } finally {
+      deviceDownloadActive.current = false;
+      deviceOperation.current = null;
+      deviceBusy.current = false;
+      if (screenMounted.current) {
+        setDeviceDownloadProgress(null);
+        setMizanImportStage('idle');
+        setAlignProgress(null);
+      }
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -313,7 +452,7 @@ export default function ImportScreen() {
         router.push({ pathname: '/poem/[id]', params: { id: existing.id } });
         return;
       }
-      const data = await fetchMizanPoem(poemId);
+      const data = await fetchPoemText(poemId);
       const parsed = parseMizanPoem(data);
       setMizanPreview({ poemId, parsed });
     } catch (err) {
@@ -380,6 +519,7 @@ export default function ImportScreen() {
 
   const handleMizanImport = async () => {
     if (!mizanPreview) return;
+    if (deviceBusy.current) return;
     setMizanSaving(true);
     setMizanError(null);
     const { poemId, parsed } = mizanPreview;
@@ -413,6 +553,51 @@ export default function ImportScreen() {
         setMizanError(extractErrorMessage(err, 'تعذر حفظ القصيدة، حاول مرة أخرى'));
       } finally {
         setMizanSaving(false);
+      }
+      return;
+    }
+
+    if (mizanAudioMode === 'youtube' && usesDeviceYoutubeDownloads()) {
+      const url = mizanYoutubeUrl.trim();
+      if (!url) {
+        setMizanError('يرجى إدخال رابط يوتيوب');
+        setMizanSaving(false);
+        return;
+      }
+      setMizanImportStage('downloading');
+      try {
+        const importedId = await importDeviceYoutube({
+          url,
+          poem: {
+            id: makeLocalId('poem'),
+            title: parsed.title,
+            poetName: parsed.poetName,
+            era: parsed.era,
+            meter: parsed.meter,
+            verses,
+            createdAt: Date.now(),
+            sourceUrl: mizanUrl.trim(),
+            externalProvider: 'mizan_al_arab',
+            externalId: poemId,
+          },
+        });
+        if (screenMounted.current) {
+          resetMizanForm();
+          try {
+            router.push({ pathname: '/poem/[id]', params: { id: importedId } });
+          } catch {
+            throw new Error('حُفظت القصيدة والصوت على جهازك، لكن تعذّر فتح القصيدة. ستجدها في مكتبتك.');
+          }
+        }
+      } catch (err) {
+        if (screenMounted.current) setMizanError(deviceCancelled.current
+          ? 'أُلغي تنزيل الصوت؛ لم تُحفظ القصيدة.'
+          : extractErrorMessage(err, 'تعذر تنزيل الصوت على الجهاز'));
+      } finally {
+        if (screenMounted.current) {
+          setMizanSaving(false);
+          setMizanImportStage('idle');
+        }
       }
       return;
     }
@@ -563,7 +748,49 @@ export default function ImportScreen() {
               externalId: verse.externalId,
             })),
           }
-        : bundled ?? parseMizanPoem(await fetchMizanPoem(entry.mizanPoemId));
+        : bundled ?? parseMizanPoem(await fetchPoemText(entry.mizanPoemId));
+      if (!screenMounted.current) return;
+
+      if (usesDeviceYoutubeDownloads()) {
+        setCatalogStatus((s) => ({ ...s, [entry.id]: 'downloading' }));
+        const verses: Verse[] = existing
+          ? existing.verses
+          : parsed.verses.map((v, index) => ({
+              id: makeLocalId('verse'),
+              orderIndex: index,
+              text: v.text,
+              externalId: v.externalId,
+            }));
+        const savedId = await importDeviceYoutube({
+          url: entry.youtubeUrl,
+          existing,
+          reciter: CATALOG_RECITERS[entry.reciterId]?.name,
+          onSave: () => setCatalogStatus((s) => ({ ...s, [entry.id]: 'caching' })),
+          onAlign: () => setCatalogStatus((s) => ({ ...s, [entry.id]: 'aligning' })),
+          poem: {
+            id: makeLocalId('poem'),
+            title: parsed.title,
+            poetName: parsed.poetName !== 'شاعر غير معروف' ? parsed.poetName : entry.poetHint,
+            era: parsed.era,
+            meter: parsed.meter,
+            verses,
+            createdAt: Date.now(),
+            sourceUrl: entry.mizanUrl,
+            externalProvider: 'mizan_al_arab',
+            externalId: entry.mizanPoemId,
+          },
+        });
+        if (screenMounted.current) {
+          setCatalogStatus((s) => ({ ...s, [entry.id]: 'idle' }));
+          setActiveCatalogId(null);
+          try {
+            router.push({ pathname: '/poem/[id]', params: { id: savedId } });
+          } catch {
+            throw new Error('حُفظت القصيدة والصوت على جهازك، لكن تعذّر فتح القصيدة. ستجدها في مكتبتك.');
+          }
+        }
+        return;
+      }
 
       setCatalogStatus((s) => ({ ...s, [entry.id]: 'downloading' }));
       const download = await downloadMutation.mutateAsync({
@@ -636,14 +863,17 @@ export default function ImportScreen() {
       setCatalogStatus((s) => ({ ...s, [entry.id]: 'idle' }));
       setActiveCatalogId(null);
     } catch (err) {
-      if (needsCookieUnlock(err)) {
+      if (!usesDeviceYoutubeDownloads() && needsCookieUnlock(err)) {
         setNeedsCookies(true);
         setRetryCatalogId(entry.id);
       }
+      if (!screenMounted.current) return;
       setCatalogStatus((s) => ({ ...s, [entry.id]: 'error' }));
       setActiveCatalogId(null);
       setError(
-        persistedDraft
+        deviceCancelled.current && usesDeviceYoutubeDownloads()
+          ? 'أُلغي تنزيل الصوت؛ لم يُغيَّر أي تسجيل محفوظ.'
+          : persistedDraft
           ? extractErrorMessage(err, 'توقفت العملية؛ يمكنك استئنافها من البطاقة أدناه.')
           : extractErrorMessage(err, 'تعذر استيراد القصيدة من ميزان العرب'),
       );
@@ -678,7 +908,9 @@ export default function ImportScreen() {
     activeCatalogStatus === 'text'
       ? 'جارٍ جلب النص...'
       : activeCatalogStatus === 'downloading'
-        ? 'جارٍ تنزيل الصوت...'
+        ? usesDeviceYoutubeDownloads() && deviceDownloadProgress !== null
+          ? `جارٍ تنزيل الصوت على الجهاز ${Math.round(deviceDownloadProgress * 100)}٪`
+          : 'جارٍ تنزيل الصوت...'
         : activeCatalogStatus === 'aligning'
           ? alignProgress === null
             ? 'جارٍ مزامنة الأبيات...'
@@ -690,7 +922,9 @@ export default function ImportScreen() {
   const confirmLabel = mizanSaving
     ? mizanImportStage === 'downloading'
       ? mizanAudioMode === 'youtube'
-        ? 'جارٍ تنزيل الصوت...'
+        ? usesDeviceYoutubeDownloads() && deviceDownloadProgress !== null
+          ? `جارٍ تنزيل الصوت ${Math.round(deviceDownloadProgress * 100)}٪`
+          : 'جارٍ تنزيل الصوت...'
         : 'جارٍ معالجة الصوت...'
       : mizanImportStage === 'aligning'
         ? alignProgress === null
@@ -711,6 +945,33 @@ export default function ImportScreen() {
     (mizanAudioMode === 'youtube' && !mizanYoutubeUrl.trim()) ||
     (mizanAudioMode === 'upload' && !mizanUploadedFile) ||
     (mizanAudioMode === 'record' && !mizanRecordedUri);
+
+  const renderDeviceYoutubeOptions = (alwaysVisible = false) => usesDeviceYoutubeDownloads() && (alwaysVisible || mizanAudioMode === 'youtube') ? (
+    <View style={[styles.deviceOptions, { borderColor: colors.border }]}>
+      <Text style={[styles.pendingDescription, { color: colors.mutedForeground }]}>
+        يُنزّل الصوت ويحفظ القصيدة مباشرةً على جهازك دون إرسال الصوت إلى خادمنا.
+      </Text>
+      <Pressable
+        onPress={() => setDeviceYoutubeAlign((value) => {
+          deviceYoutubeAlignmentPreference = !value;
+          return !value;
+        })}
+        disabled={mizanSaving || mizanLoading}
+        accessibilityRole="switch"
+        accessibilityState={{ checked: deviceYoutubeAlign, disabled: mizanSaving || mizanLoading }}
+        testID="device-youtube-align-switch"
+        style={styles.deviceSwitchRow}
+      >
+        <Feather name={deviceYoutubeAlign ? 'check-square' : 'square'} size={22} color={colors.primary} />
+        <Text style={[styles.deviceSwitchText, { color: colors.foreground }]}>مزامنة الأبيات تلقائيًا (اختياري)</Text>
+      </Pressable>
+      <Text style={[styles.pendingDescription, { color: colors.mutedForeground }]}>
+        {deviceYoutubeAlign
+          ? 'تتطلب المزامنة وحدها رفع ملف MP3 بعد حفظه على جهازك إلى الخادم لمعالجة توقيت الأبيات.'
+          : 'يمكنك الاستماع دون مزامنة الأبيات؛ لا يُرفع الصوت إلى الخادم.'}
+      </Text>
+    </View>
+  ) : null;
 
   return (
     <KeyboardAvoidingView
@@ -733,6 +994,37 @@ export default function ImportScreen() {
             <Text style={[styles.errorText, { color: colors.destructive }]}>{error}</Text>
           </View>
         ) : null}
+        {deviceDownloadRecoveries.map((operation) => (
+          <View key={operation.id} testID={`device-recovery-${operation.id}`}
+            style={[styles.pendingCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.pendingTitle, { color: colors.foreground }]}>{operation.title}</Text>
+            <Text style={[styles.pendingDescription, { color: colors.mutedForeground }]}>
+              {operation.state === 'running'
+                ? `جارٍ تنزيل الصوت على الجهاز${operation.progress == null ? '' : ` — ${Math.round(operation.progress * 100)}٪`}. سيُحفظ في المكتبة عند العودة للتطبيق.`
+                : operation.message ?? 'توقف التنزيل. يمكنك إعادة المحاولة أو تنظيف العملية.'}
+            </Text>
+            <View style={styles.pendingActions}>
+              {operation.state === 'error' ? (
+                <Pressable accessibilityRole="button" testID="device-recovery-retry"
+                  disabled={libraryLoading}
+                  onPress={() => { void retryDeviceDownload(operation.id).catch((err) => setError(extractErrorMessage(err, 'تعذرت إعادة المحاولة'))); }}
+                  style={[styles.pendingButton, { backgroundColor: colors.primary }]}>
+                  <Text style={[styles.pendingButtonText, { color: colors.primaryForeground }]}>إعادة المحاولة</Text>
+                </Pressable>
+              ) : null}
+              <Pressable accessibilityRole="button" testID="device-recovery-cancel"
+                onPress={() => {
+                  const action = operation.state === 'running' ? cancelRecoveredDownload : dismissDeviceDownload;
+                  void action(operation.id).catch((err) => setError(extractErrorMessage(err, 'تعذر تنظيف التنزيل؛ أعد المحاولة')));
+                }}
+                style={[styles.pendingButton, { borderColor: colors.border }]}>
+                <Text style={[styles.pendingButtonText, { color: colors.destructive }]}>
+                  {operation.state === 'running' ? 'إلغاء التنزيل' : 'إزالة العملية'}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        ))}
         {activeCatalog ? (
           <View style={[styles.pendingCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <ActivityIndicator size="small" color={colors.primary} />
@@ -744,6 +1036,12 @@ export default function ImportScreen() {
                 {activeCatalogLabel ?? 'جارٍ تجهيز القصيدة...'}
               </Text>
             </View>
+            {usesDeviceYoutubeDownloads() && activeCatalogStatus === 'downloading' ? (
+              <Pressable onPress={cancelDeviceDownload} accessibilityRole="button" testID="device-catalog-cancel"
+                style={[styles.pendingButton, { borderColor: colors.border }]}>
+                <Text style={[styles.pendingButtonText, { color: colors.destructive }]}>إلغاء التنزيل</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : null}
 
@@ -805,6 +1103,22 @@ export default function ImportScreen() {
         ) : null}
 
         <View style={styles.catalogSection}>
+          {usesDeviceYoutubeDownloads() ? (
+            <View style={{ gap: 8 }}>
+              <Text style={[styles.sourcePromptTitle, { color: colors.foreground }]}>تنزيلات يوتيوب على الجهاز</Text>
+              <Text style={[styles.pendingDescription, { color: colors.mutedForeground }]}>
+                يستمر التنزيل عند قفل الشاشة أو مغادرة هذه الصفحة. تابع التقدّم أو ألغِه من إشعار أندرويد.
+                قد توقفه قيود البطارية أو إيقاف التطبيق بالقوة؛ ستظهر العملية المتوقفة عند العودة ولن تُعاد تلقائيًا.
+                بعد إعادة تشغيل التطبيق يُحفظ الصوت دون رفعه للمزامنة تلقائيًا.
+              </Text>
+              <Pressable accessibilityRole="button" onPress={() => {
+                void Linking.openSettings().catch(() => setError('تعذر فتح إعدادات أندرويد.'));
+              }}>
+                <Text style={{ color: colors.primary }}>إعدادات الإشعارات والبطارية</Text>
+              </Pressable>
+              {renderDeviceYoutubeOptions(true)}
+            </View>
+          ) : null}
           <Pressable
             onPress={() => router.push('/(tabs)/catalog')}
             accessibilityRole="button"
@@ -936,6 +1250,7 @@ export default function ImportScreen() {
               </View>
 
               {mizanAudioMode === 'youtube' ? (
+                <View style={styles.audioSourceBox}>
                 <View
                   style={[
                     styles.inputRow,
@@ -954,6 +1269,8 @@ export default function ImportScreen() {
                     editable={!mizanLoading && !mizanSaving}
                     testID="mizan-youtube-url-input-before-fetch"
                   />
+                </View>
+                {renderDeviceYoutubeOptions()}
                 </View>
               ) : null}
 
@@ -1067,7 +1384,7 @@ export default function ImportScreen() {
             </View>
           ) : null}
 
-          {needsCookies ? (
+          {needsCookies && !usesDeviceYoutubeDownloads() ? (
             <View style={styles.cookieHelpBox}>
               <View style={styles.cookieHeaderRow}>
                 <Text style={styles.cookieTitle}>يرجى إدخال ملفات تعريف الارتباط (Cookies)</Text>
@@ -1163,6 +1480,7 @@ export default function ImportScreen() {
               </View>
 
               {mizanAudioMode === 'youtube' ? (
+                <View style={styles.audioSourceBox}>
                 <View
                   style={[
                     styles.inputRow,
@@ -1181,6 +1499,8 @@ export default function ImportScreen() {
                     editable={!mizanLoading && !mizanSaving}
                     testID="mizan-youtube-url-input-after-fetch"
                   />
+                </View>
+                {renderDeviceYoutubeOptions()}
                 </View>
               ) : null}
 
@@ -1304,6 +1624,12 @@ export default function ImportScreen() {
                   {confirmLabel}
                 </Text>
               </Pressable>
+              {usesDeviceYoutubeDownloads() && mizanSaving && mizanAudioMode === 'youtube' && mizanImportStage === 'downloading' ? (
+                <Pressable onPress={cancelDeviceDownload} accessibilityRole="button" testID="device-mizan-cancel"
+                  style={[styles.pendingButton, { borderColor: colors.border }]}>
+                  <Text style={[styles.pendingButtonText, { color: colors.destructive }]}>إلغاء التنزيل</Text>
+                </Pressable>
+              ) : null}
             </View>
           ) : null}
         </View>
@@ -1523,6 +1849,24 @@ const styles = StyleSheet.create({
   },
   audioSourceBox: {
     gap: 12,
+  },
+  deviceOptions: {
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 12,
+    gap: 10,
+  },
+  deviceSwitchRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    minHeight: 44,
+    gap: 10,
+  },
+  deviceSwitchText: {
+    flex: 1,
+    textAlign: 'right',
+    fontFamily: 'Cairo_600SemiBold',
+    fontSize: 14,
   },
   audioSourceButton: {
     flexDirection: 'row-reverse',

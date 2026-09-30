@@ -10,8 +10,11 @@ web-build/
 expo-env.d.ts
 
 # Native
-ios/
-android/
+/ios/
+/android/
+# Local Expo modules contain source under modules/*/android; only ignore their output.
+modules/*/android/build/
+modules/*/android/.gradle/
 *.orig.*
 *.jks
 *.p8
