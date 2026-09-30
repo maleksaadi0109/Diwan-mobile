@@ -48,6 +48,10 @@ Run `pnpm install --frozen-lockfile` from the repository root before EAS command
    `pnpm dlx eas-cli@latest login` if using the CLI. Reuse that project's
    existing Android signing key; do not initialize a different project.
    Keep the checked-in `preview` build profile in `eas.json`.
+   For builds triggered through the Expo integration, connect the
+   `maleksaadi0109/Diwan-mobile` repository in this Expo project's GitHub
+   settings and set **Base directory** to `artifacts/mobile`. A successful
+   CLI-uploaded build does not imply that this GitHub connection exists.
 3. If using the optional API, set `EXPO_PUBLIC_DOMAIN` in the **preview** EAS environment to the published
    hostname only (e.g. `example.replit.app`, **without** `https://`):
    `pnpm dlx eas-cli@latest env:set --environment preview --name EXPO_PUBLIC_DOMAIN --value <published-host> --visibility plaintext`.
