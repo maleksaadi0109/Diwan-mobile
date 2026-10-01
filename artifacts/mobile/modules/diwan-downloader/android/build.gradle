@@ -16,6 +16,7 @@ android {
 }
 
 dependencies {
+  implementation 'com.facebook.react:react-android'
   implementation 'io.github.junkfood02.youtubedl-android:library:0.18.1'
   implementation 'io.github.junkfood02.youtubedl-android:ffmpeg:0.18.1'
   androidTestImplementation 'androidx.test.ext:junit:1.3.0'

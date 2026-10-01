@@ -188,8 +188,15 @@ internal class DownloadStore(private val context: Context) {
       if (!Regex("[A-Za-z0-9_-]{1,100}").matches(id)) throw DownloadError("E_STORAGE", "Invalid recording ID")
     }
     fun syncDirectory(directory: File) {
-      val fd = Os.open(directory.absolutePath, OsConstants.O_RDONLY or OsConstants.O_DIRECTORY, 0)
-      try { Os.fsync(fd) } finally { Os.close(fd) }
+      val fd = Os.open(directory.absolutePath, OsConstants.O_RDONLY, 0)
+      try {
+        if (!OsConstants.S_ISDIR(Os.fstat(fd).st_mode)) {
+          throw DownloadError("E_STORAGE", "Cannot sync a non-directory path")
+        }
+        Os.fsync(fd)
+      } finally {
+        Os.close(fd)
+      }
     }
   }
 }

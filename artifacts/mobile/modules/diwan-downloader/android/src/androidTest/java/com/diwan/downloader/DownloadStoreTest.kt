@@ -37,6 +37,16 @@ class DownloadStoreTest {
     r.durationMs = 1000
   }
 
+  @Test fun directorySyncUsesPublicAndroidApiAndRejectsRegularFiles() {
+    DownloadStore.syncDirectory(root)
+    val regularFile = File(root, "not-a-directory").apply { writeText("keep") }
+    try {
+      DownloadStore.syncDirectory(regularFile)
+      fail("must reject regular file")
+    } catch (_: DownloadError) {}
+    assertEquals("keep", regularFile.readText())
+  }
+
   @Test fun activeRecoveryInterruptsAndCleans() {
     val s = DownloadStore(context)
     val r = record()
