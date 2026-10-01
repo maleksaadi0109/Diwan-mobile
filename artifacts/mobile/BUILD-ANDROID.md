@@ -79,10 +79,16 @@ access controls and usage before broad distribution.
 ## Foreground-download verification (required before release)
 
 The workspace JS tests and typecheck pass, but this change has **not** been
-compiled or exercised on an Android device in this environment. It currently has
-no JDK, Android SDK, Gradle/adb or connected Android device. Expo project
-association is configured for cloud builds. Web preview/Expo Go cannot verify this
-native module. Do not treat the checklist below as a record of successful tests.
+exercised on an Android device in this environment. A cloud `preview` APK build
+succeeded on 2026-10-01 with compileSdk/targetSdk 36 and Android versionCode 2.
+Inspection of that APK confirmed the non-exported `dataSync` download service,
+required permissions, and compiled downloader, coordinator and journal classes.
+These are packaging checks, not evidence of screen-lock or recovery behavior.
+The workspace has JDK 17 for standalone checks, but no Android SDK, Gradle/adb
+or connected Android device. Later engine-stage diagnostics require a new APK
+build and have not yet been compiled or exercised on Android.
+Web preview/Expo Go cannot verify this native module. Do not treat the checklist
+below as a record of successful device tests.
 
 After linking EAS and building the `preview` APK, or using a local JDK/Android SDK
 with `pnpm exec expo prebuild --platform android` and `./gradlew :app:assembleDebug`:

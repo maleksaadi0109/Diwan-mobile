@@ -9,8 +9,15 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import expo.modules.kotlin.exception.CodedException
 import java.io.File
+import java.net.ConnectException
+import java.net.SocketException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import java.util.Collections
+import java.util.IdentityHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.ZipFile
+import javax.net.ssl.SSLException
 
 internal class DownloadError(val errorCode: String, message: String, cause: Throwable? = null) :
   CodedException(errorCode, message, cause)
@@ -58,7 +65,22 @@ internal object DownloadEngine {
         val source = zip.getInputStream(entry).bufferedReader().use { it.readText() }
         Regex("""__version__\s*=\s*['"]([^'"]+)""").find(source)?.groupValues?.get(1) == tag
       }
-    } catch (_: Exception) { false }
+    } catch (e: Exception) {
+      android.util.Log.e("DiwanDownloader", "Installed yt-dlp package validation failed", e)
+      false
+    }
+  }
+
+  private fun isUpdaterNetworkFailure(error: Throwable): Boolean {
+    val seen = Collections.newSetFromMap(IdentityHashMap<Throwable, Boolean>())
+    var current: Throwable? = error
+    while (current != null && seen.add(current)) {
+      if (current is UnknownHostException || current is ConnectException ||
+        current is SocketException || current is SocketTimeoutException || current is SSLException
+      ) return true
+      current = current.cause
+    }
+    return false
   }
 
   @Suppress("DEPRECATION")
@@ -72,22 +94,44 @@ internal object DownloadEngine {
     val installed = File(context.noBackupFilesDir, "youtubedl-android/yt-dlp/yt-dlp")
     if (preferences.getString("appLibraryVersion", null) == key &&
       last > 0 && now >= last && now - last < 24L * 60 * 60 * 1000 &&
-      engineMatchesTag(installed, YoutubeDL.getInstance().version(context))) return
+      engineMatchesTag(installed, try {
+        YoutubeDL.getInstance().version(context)
+      } catch (e: Exception) {
+        transfer.check()
+        android.util.Log.e("DiwanDownloader", "Unable to inspect the installed yt-dlp version", e)
+        throw DownloadError("E_ENGINE_UPDATE", "Unable to inspect the installed yt-dlp version", e)
+      })) return
     transfer.check()
     try {
       YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)
-      if (!engineMatchesTag(installed, YoutubeDL.getInstance().version(context))) {
-        throw DownloadError("E_ENGINE_UPDATE", "Updated yt-dlp zipapp is missing, invalid or does not match the stable release")
-      }
+    } catch (e: Exception) {
       transfer.check()
+      android.util.Log.e("DiwanDownloader", "Stable yt-dlp update failed", e)
+      val code = if (isUpdaterNetworkFailure(e)) "E_ENGINE_UPDATE_NETWORK" else "E_ENGINE_UPDATE"
+      throw DownloadError(code, "Unable to update yt-dlp from the official stable release", e)
+    }
+    val updatedTag = try {
+      YoutubeDL.getInstance().version(context)
+    } catch (e: Exception) {
+      transfer.check()
+      android.util.Log.e("DiwanDownloader", "Unable to inspect the updated yt-dlp version", e)
+      throw DownloadError("E_ENGINE_UPDATE", "Unable to inspect the updated yt-dlp version", e)
+    }
+    if (!engineMatchesTag(installed, updatedTag)) {
+      throw DownloadError("E_ENGINE_PACKAGE_INVALID", "Updated yt-dlp package is missing, invalid or does not match the stable release")
+    }
+    transfer.check()
+    try {
       if (!preferences.edit().putString("appLibraryVersion", key)
           .putLong("lastSuccessfulCheck", System.currentTimeMillis()).commit()) {
-        throw DownloadError("E_ENGINE_UPDATE", "Cannot save the successful yt-dlp update check")
+        android.util.Log.e("DiwanDownloader", "Cannot persist the successful yt-dlp update check")
+        throw DownloadError("E_ENGINE_PREFERENCE_WRITE", "Cannot save the successful yt-dlp update check")
       }
     } catch (e: DownloadError) { throw e }
     catch (e: Exception) {
       transfer.check()
-      throw DownloadError("E_ENGINE_UPDATE", "Unable to update yt-dlp from the official stable release", e)
+      android.util.Log.e("DiwanDownloader", "Cannot persist the successful yt-dlp update check", e)
+      throw DownloadError("E_ENGINE_PREFERENCE_WRITE", "Cannot save the successful yt-dlp update check", e)
     }
   }
 
@@ -96,10 +140,18 @@ internal object DownloadEngine {
     if (!stage.mkdirs()) throw DownloadError("E_STORAGE", "Unable to create staging directory")
     try {
       YoutubeDL.getInstance().init(context)
+    } catch (e: Exception) {
+      transfer.check()
+      android.util.Log.e("DiwanDownloader", "yt-dlp initialization failed", e)
+      throw DownloadError("E_DOWNLOADER_INIT", "Unable to initialize the yt-dlp downloader", e)
+    }
+    transfer.check()
+    try {
       FFmpeg.getInstance().init(context)
     } catch (e: Exception) {
       transfer.check()
-      throw DownloadError("E_ENGINE_UPDATE", "Unable to initialize the native audio engine", e)
+      android.util.Log.e("DiwanDownloader", "FFmpeg initialization failed", e)
+      throw DownloadError("E_CONVERTER_INIT", "Unable to initialize the FFmpeg audio converter", e)
     }
     transfer.check()
     ensureCurrentEngine(context, transfer)

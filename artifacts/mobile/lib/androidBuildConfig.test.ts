@@ -31,4 +31,31 @@ describe('local Android module build metadata', () => {
     expect(store).not.toContain('OsConstants.O_DIRECTORY');
     expect(store).toContain('OsConstants.S_ISDIR(Os.fstat(fd).st_mode)');
   });
+
+  it('keeps native engine failures stage-specific and checks cancellation before remapping initializer exceptions', () => {
+    const engine = readFileSync(
+      new URL('../modules/diwan-downloader/android/src/main/java/com/diwan/downloader/DownloadEngine.kt', import.meta.url),
+      'utf8',
+    );
+    for (const code of [
+      'E_ENGINE_UPDATE',
+      'E_DOWNLOADER_INIT',
+      'E_CONVERTER_INIT',
+      'E_ENGINE_UPDATE_NETWORK',
+      'E_ENGINE_PACKAGE_INVALID',
+      'E_ENGINE_PREFERENCE_WRITE',
+    ]) {
+      expect(engine).toContain(`"${code}"`);
+    }
+    expect(engine).toMatch(
+      /YoutubeDL\.getInstance\(\)\.init\(context\)\s*\}\s*catch \(e: Exception\) \{\s*transfer\.check\(\)\s*android\.util\.Log\.e\("DiwanDownloader", "yt-dlp initialization failed", e\)\s*throw DownloadError\("E_DOWNLOADER_INIT"/,
+    );
+    expect(engine).toMatch(
+      /FFmpeg\.getInstance\(\)\.init\(context\)\s*\}\s*catch \(e: Exception\) \{\s*transfer\.check\(\)\s*android\.util\.Log\.e\("DiwanDownloader", "FFmpeg initialization failed", e\)\s*throw DownloadError\("E_CONVERTER_INIT"/,
+    );
+    expect(engine).toContain('android.util.Log.e("DiwanDownloader", "Stable yt-dlp update failed", e)');
+    expect(engine).toContain('current is UnknownHostException');
+    expect(engine).toContain('current is SSLException');
+    expect(engine).not.toMatch(/catch\s*\([^)]*Throwable/);
+  });
 });

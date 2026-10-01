@@ -14,7 +14,7 @@ All methods return promises. The module name is `DiwanDownloader`.
 
 An unacknowledged completion is *not yet adopted* from the native module's perspective. JS must reconcile it into its library and acknowledge it; this module cannot infer whether JS saved its separate library database. Do not call discard on an adopted-but-not-yet-acknowledged completion.
 
-Errors include `E_INVALID_URL`, `E_FOREGROUND_REQUIRED`, `E_ID_CONFLICT`, `E_BUSY`, `E_STORAGE`, `E_SERVICE_START`, `E_CANCELLED`, `E_LOGIN_REQUIRED`, `E_ENGINE_UPDATE`, `E_DOWNLOAD_FAILED`, `E_TIMEOUT`, `E_SIZE_LIMIT`, `E_FGS_TIMEOUT`, `E_SERVICE_STOPPED`, `E_INTERRUPTED`, `E_PROVENANCE`, and `E_CLEANUP`. Promise failures cover API/storage errors; transfer failures are reported by `list`. A corrupt journal rejects explicitly rather than guessing file ownership. Failed cleanup remains visible in the journal and is retried on recovery/removal.
+Errors include `E_INVALID_URL`, `E_FOREGROUND_REQUIRED`, `E_ID_CONFLICT`, `E_BUSY`, `E_STORAGE`, `E_SERVICE_START`, `E_CANCELLED`, `E_LOGIN_REQUIRED`, `E_ENGINE_UPDATE`, `E_DOWNLOAD_FAILED`, `E_TIMEOUT`, `E_SIZE_LIMIT`, `E_FGS_TIMEOUT`, `E_SERVICE_STOPPED`, `E_INTERRUPTED`, `E_PROVENANCE`, and `E_CLEANUP`. Engine preparation also reports stage-specific codes for downloader initialization, converter initialization, updater networking, installed-package validation and update-check persistence. The bridge maps these to fixed Arabic messages containing the diagnostic code, never arbitrary native exception text. Original exceptions are logged under `DiwanDownloader` with fixed stage labels. Promise failures cover API/storage errors; transfer failures are reported by `list`. A corrupt journal rejects explicitly rather than guessing file ownership. Failed cleanup remains visible in the journal and is retried on recovery/removal.
 
 ## Service and lifecycle
 
@@ -48,7 +48,7 @@ Native binaries require `extractNativeLibs=true` and `expo.useLegacyPackaging=tr
 
 ## Verification status
 
-This implementation has **not been compiled or run on an Android device here**: `java`, `gradle`, `kotlinc` and `/usr/lib/jvm` were not present when checked. Source/static review is not native validation.
+A cloud Android `preview` APK compiled successfully on 2026-10-01, and its manifest and compiled downloader classes were inspected. Subsequent stage-diagnostic changes require a new APK build and are not native-verified yet. The workspace now has JDK 17 for standalone validation but no Android SDK/adb or connected Android device. The current official stable zipapp passed Java ZIP/version checks; GitHub metadata also returned HTTP 200 from the workspace's Java client. These checks do not establish successful engine initialization, asset fetching or voice downloading on a phone/tablet, nor background lifecycle behavior.
 
 Android instrumentation tests under `android/src/androidTest` cover interrupted-record cleanup, the publication/journal crash window, no-replace behavior, acknowledgement preserving final audio, owned discard, and replaced-file provenance refusal. They use synthetic bytes solely to test storage (not media decoding/network). They have **not been executed**.
 

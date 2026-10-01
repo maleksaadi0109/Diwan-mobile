@@ -37,6 +37,14 @@ import {
 const VIDEO_ID = 'abcdefghijk';
 const URL = `https://www.youtube.com/watch?v=${VIDEO_ID}`;
 const ID = 'yt-local-1234-abc123';
+const ENGINE_DIAGNOSTIC_CODES = [
+  'E_ENGINE_UPDATE',
+  'E_DOWNLOADER_INIT',
+  'E_CONVERTER_INIT',
+  'E_ENGINE_UPDATE_NETWORK',
+  'E_ENGINE_PACKAGE_INVALID',
+  'E_ENGINE_PREFERENCE_WRITE',
+];
 const uri = (id = ID) => `file:///documents/recording-audio/${id}.mp3`;
 const entry = (state: DeviceYoutubeOperation['state'], overrides: Partial<DeviceYoutubeOperation> = {}): DeviceYoutubeOperation => ({
   recordingId: ID, url: URL, state, progress: 0.5, ...overrides,
@@ -276,6 +284,47 @@ describe('durable device operations', () => {
   ])('maps %s to an actionable message', async (code, text) => {
     nativeWith([entry('failed', { errorCode: code })]);
     await expect(downloadYoutubeAudioOnDevice(URL, { recordingId: ID })).rejects.toThrow(text);
+  });
+
+  it.each(ENGINE_DIAGNOSTIC_CODES)('maps terminal journal diagnostic %s to a fixed Arabic message', async (code) => {
+    const { native } = nativeWith([entry('failed', { errorCode: code })]);
+    let failure: unknown;
+    try {
+      await downloadYoutubeAudioOnDevice(URL, { recordingId: ID });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain(code);
+    expect(native.start).not.toHaveBeenCalled();
+  });
+
+  it.each(ENGINE_DIAGNOSTIC_CODES)('maps immediate native.start exception %s through the same diagnostic mapping', async (code) => {
+    const { native } = nativeWith();
+    native.start.mockRejectedValue({ code, message: 'sensitive native exception text' });
+    let failure: unknown;
+    try {
+      await downloadYoutubeAudioOnDevice(URL, { recordingId: ID });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain(code);
+    expect((failure as Error).message).not.toContain('sensitive native exception text');
+    expect(native.start).toHaveBeenCalledOnce();
+  });
+
+  it.each(['E_PRIVATE_DETAIL', 'toString', 'constructor'])('does not expose arbitrary native code %s in user-facing errors', async (code) => {
+    const { native } = nativeWith([entry('failed', { errorCode: code })]);
+    let failure: unknown;
+    try {
+      await downloadYoutubeAudioOnDevice(URL, { recordingId: ID });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).not.toContain(code);
+    expect((failure as Error).message).not.toContain('sensitive');
   });
 
   it('validates ownership before native discard and provides explicit cancel API', async () => {

@@ -131,13 +131,24 @@ function abortError(): Error {
 }
 
 function nativeErrorCode(error: unknown): string {
-  return error && typeof error === 'object' && 'code' in error ? String(error.code) : '';
+  try {
+    return error && typeof error === 'object' && 'code' in error && typeof error.code === 'string'
+      ? error.code
+      : '';
+  } catch {
+    return '';
+  }
 }
 
 function downloadError(error: unknown): Error {
   const code = nativeErrorCode(error);
   const messages: Record<string, string> = {
-    E_ENGINE_UPDATE: 'تعذر تجهيز أحدث محرك لتنزيل يوتيوب. تحقق من الإنترنت وإمكانية الاتصال بـ GitHub ثم أعد المحاولة؛ لا يحتاج هذا إلى خادم ديوان.',
+    E_ENGINE_UPDATE: 'تعذر تجهيز أحدث محرك لتنزيل يوتيوب. أرسل رمز التشخيص إلى الدعم: E_ENGINE_UPDATE.',
+    E_DOWNLOADER_INIT: 'تعذرت تهيئة محمّل yt-dlp على الجهاز. أرسل رمز التشخيص إلى الدعم: E_DOWNLOADER_INIT.',
+    E_CONVERTER_INIT: 'تعذرت تهيئة محوّل الصوت FFmpeg على الجهاز. أرسل رمز التشخيص إلى الدعم: E_CONVERTER_INIT.',
+    E_ENGINE_UPDATE_NETWORK: 'تعذر الاتصال لتنزيل تحديث محرك يوتيوب. تحقق من اتصال الإنترنت ثم أعد المحاولة. رمز التشخيص: E_ENGINE_UPDATE_NETWORK.',
+    E_ENGINE_PACKAGE_INVALID: 'تم تنزيل تحديث محرك يوتيوب لكن الحزمة المثبّتة غير صالحة. أرسل رمز التشخيص إلى الدعم: E_ENGINE_PACKAGE_INVALID.',
+    E_ENGINE_PREFERENCE_WRITE: 'تعذر حفظ حالة التحقق من تحديث محرك يوتيوب على الجهاز. أرسل رمز التشخيص إلى الدعم: E_ENGINE_PREFERENCE_WRITE.',
     E_LOGIN_REQUIRED: 'يوتيوب يطلب تسجيل الدخول لهذا المقطع. اختر مقطعًا عامًا آخر؛ لن تُرسل بيانات حسابك إلى أي خادم.',
     E_CANCELLED: 'تم إلغاء تنزيل الصوت.',
     E_BUSY: 'يوجد تنزيل صوت آخر قيد التنفيذ. انتظر اكتماله أو ألغِه ثم أعد المحاولة.',
@@ -150,7 +161,7 @@ function downloadError(error: unknown): Error {
     E_NOTIFICATION: 'تعذر عرض إشعار تنزيل الصوت. تحقق من إعدادات إشعارات التطبيق وأعد المحاولة.',
   };
   if (code === 'E_CANCELLED') return abortError();
-  if (messages[code]) return new Error(messages[code]);
+  if (Object.prototype.hasOwnProperty.call(messages, code)) return new Error(messages[code]);
   return new Error('تعذر تنزيل الصوت على الجهاز. تحقق من الإنترنت والمساحة المتاحة، ثم أعد المحاولة.');
 }
 
