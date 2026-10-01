@@ -8,7 +8,6 @@ import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.security.MessageDigest
-import java.util.zip.ZipFile
 
 /** Installs the authenticated zipapp shipped with this APK; no runtime updater is used. */
 internal object PinnedEngine {
@@ -22,7 +21,6 @@ internal object PinnedEngine {
   private const val ENGINE_FILE = "yt-dlp"
   private const val STAGING_FILE = ".yt-dlp.pinned-staging"
   private const val BUFFER_SIZE = 32 * 1024
-  private const val VERSION_ENTRY_LIMIT = 64 * 1024L
 
   private fun engineFile(context: Context) = File(context.noBackupFilesDir, "$DIRECTORY/$ENGINE_FILE")
 
@@ -173,42 +171,12 @@ internal object PinnedEngine {
     if (!file.isFile || file.length() != EXPECTED_SIZE || file.length() > MAX_SIZE) return false
     if (sha256(file, check) != SHA256) return false
     return try {
-      ZipFile(file).use { zip ->
-        val main = zip.getEntry("__main__.py")
-        val version = zip.getEntry("yt_dlp/version.py")
-        val ejs = zip.getEntry("yt_dlp_ejs/yt/solver/core.min.js")
-        if (main == null || main.isDirectory || main.size <= 0 ||
-          version == null || version.isDirectory || version.size !in 1..VERSION_ENTRY_LIMIT ||
-          ejs == null || ejs.isDirectory || ejs.size <= 0
-        ) return false
-        val source = zip.getInputStream(version).use { input ->
-          val bytes = input.readBounded(VERSION_ENTRY_LIMIT, check)
-          String(bytes, Charsets.UTF_8)
-        }
-        Regex("""__version__\s*=\s*['"]([^'"]+)['"]""")
-          .find(source)?.groupValues?.get(1) == VERSION
-      }
+      EngineZipValidation.isValid(file, VERSION) { check() }
     } catch (e: DownloadError) {
       throw e
     } catch (_: Exception) {
       false
     }
-  }
-
-  private fun InputStream.readBounded(max: Long, check: () -> Unit): ByteArray {
-    val output = java.io.ByteArrayOutputStream()
-    val buffer = ByteArray(8 * 1024)
-    var total = 0L
-    while (true) {
-      check()
-      val count = read(buffer)
-      if (count < 0) break
-      if (count == 0) continue
-      total += count
-      if (total > max) return ByteArray(0)
-      output.write(buffer, 0, count)
-    }
-    return output.toByteArray()
   }
 
   private fun sha256(file: File, check: () -> Unit): String {

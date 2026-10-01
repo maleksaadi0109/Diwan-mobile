@@ -9,7 +9,9 @@
     "eas-build-pre-install": "node scripts/check-android-build-env.cjs",
     "serve": "node server/serve.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:engine-zip": "node scripts/test-engine-zip.mjs",
+    "eas-build-post-install": "node scripts/test-engine-zip.mjs"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",

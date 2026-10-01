@@ -87,8 +87,15 @@ required permissions, and compiled downloader, coordinator and journal classes.
 These are packaging checks, not evidence of screen-lock or recovery behavior.
 The workspace has JDK 17 for standalone checks, but no Android SDK, Gradle/adb
 or connected Android device. Engine-stage diagnostics also compiled in a later
-cloud APK with Android versionCode 3. The pinned-engine installer prepared for
-versionCode 4 has not yet been compiled or exercised on Android.
+cloud APK with Android versionCode 3. The pinned-engine installer also compiled
+successfully in versionCode 4; APK inspection verified the engine's pinned SHA-256,
+version, required components and foreground-service manifest. It has not yet been
+validated successfully on a device: a fresh retry reported `E_ENGINE_PACKAGE_INVALID`.
+The cause was Android's `ZipFile` rejecting the official engine's Python launcher
+prefix. The versionCode 5 correction preserves the full engine digest and validates
+its ZIP body with a bounded streaming parser. Run `pnpm run test:engine-zip` from
+`artifacts/mobile` with JDK 17; these checks also run before Android EAS compilation.
+They pass on the exact official asset but do not replace device/lifecycle tests.
 Web preview/Expo Go cannot verify this native module. Do not treat the checklist
 below as a record of successful device tests.
 

@@ -77,10 +77,25 @@ describe('local Android module build metadata', () => {
     expect(installer).toContain('atomic.startWrite()');
     expect(installer).toContain('atomic.finishWrite(output)');
     expect(installer).toContain('atomic.failWrite(output)');
-    expect(installer).toContain('"__main__.py"');
-    expect(installer).toContain('"yt_dlp/version.py"');
-    expect(installer).toContain('"yt_dlp_ejs/yt/solver/core.min.js"');
-    expect(installer).toContain('Regex("""__version__');
+    expect(installer.indexOf('sha256(file, check)'))
+      .toBeLessThan(installer.indexOf('EngineZipValidation.isValid(file, VERSION)'));
+    const zipValidation = readFileSync(
+      new URL('../modules/diwan-downloader/android/src/main/java/com/diwan/downloader/EngineZipValidation.java', import.meta.url),
+      'utf8',
+    );
+    expect(installer).toContain('EngineZipValidation.isValid(file, VERSION) { check() }');
+    expect(installer).not.toMatch(/\bZipFile\b/);
+    expect(zipValidation).toContain('static boolean isValid(');
+    expect(zipValidation).toContain('PushbackInputStream');
+    expect(zipValidation).toContain('ZipInputStream');
+    expect(zipValidation).toContain('"#!/usr/bin/env python3\\n"');
+    expect(zipValidation).toContain('"__main__.py"');
+    expect(zipValidation).toContain('"yt_dlp/version.py"');
+    expect(zipValidation).toContain('"yt_dlp_ejs/yt/solver/core.min.js"');
+    expect(zipValidation).toContain('ENTRY_LIMIT = 2048');
+    expect(zipValidation).toContain('TOTAL_UNCOMPRESSED_LIMIT = 64L * 1024 * 1024');
+    expect(zipValidation).toContain('VERSION_ENTRY_LIMIT = 64L * 1024');
+    expect(zipValidation).not.toMatch(/\bZipFile\b/);
     expect(installer).not.toMatch(/updateYoutubeDL|UpdateChannel|https?:\/\/|browser_download_url/);
     expect(installer).not.toMatch(/catch\s*\([^)]*Throwable/);
   });

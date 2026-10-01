@@ -36,6 +36,18 @@ class PinnedEngineTest {
       .open(PinnedEngine.ASSET_PATH).use { it.readBytes() }
   }
 
+  @Test fun bundledPythonZipappPassesPrefixAwareStreamingValidation() {
+    val asset = bundledBytes()
+    val shebang = "#!/usr/bin/env python3\n".toByteArray(Charsets.US_ASCII)
+    assertEquals(23, shebang.size)
+    assertArrayEquals(shebang, asset.copyOfRange(0, shebang.size))
+    assertEquals('P'.code.toByte(), asset[shebang.size])
+    assertEquals('K'.code.toByte(), asset[shebang.size + 1])
+
+    val archive = File(root, "bundled-yt-dlp").apply { writeBytes(asset) }
+    assertTrue(EngineZipValidation.isValid(archive, PinnedEngine.VERSION) {})
+  }
+
   @Test fun checksumMismatchDoesNotReplaceExistingEngine() {
     val target = engineFile().apply {
       parentFile!!.mkdirs()
