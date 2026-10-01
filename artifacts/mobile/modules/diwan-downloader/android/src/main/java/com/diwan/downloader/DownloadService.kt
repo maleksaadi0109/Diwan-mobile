@@ -50,7 +50,7 @@ class DownloadService : Service() {
     }
     if (intent.action == CANCEL) {
       try { DownloadCoordinator.cancel(applicationContext, id, token) }
-      catch (e: Exception) { android.util.Log.e("DiwanDownloader", "Cannot persist notification cancellation", e) }
+      catch (_: Exception) { android.util.Log.e("DiwanDownloader", "Cannot persist notification cancellation") }
       if (currentId == id && currentToken == token) finishTransfer(id, token)
       else if (currentId == null) stopSelf(startId)
       return START_NOT_STICKY
@@ -75,7 +75,7 @@ class DownloadService : Service() {
           .apply { setReferenceCounted(false); acquire(DownloadEngine.WALL_MS + 5_000) }
         val timeout = Runnable {
           try { DownloadCoordinator.timeout(applicationContext, id, token, "E_TIMEOUT") }
-          catch (e: Exception) { android.util.Log.e("DiwanDownloader", "Cannot persist service timeout", e) }
+          catch (_: Exception) { android.util.Log.e("DiwanDownloader", "Cannot persist service timeout") }
           finally { finishTransfer(id, token) }
         }
         deadline = timeout
@@ -84,7 +84,7 @@ class DownloadService : Service() {
       if (!DownloadCoordinator.launch(this, id, token)) finishTransfer(id, token)
     } catch (e: Exception) {
       try { DownloadCoordinator.timeout(applicationContext, id, token, "E_SERVICE_START") }
-      catch (failure: Exception) { android.util.Log.e("DiwanDownloader", "Cannot persist service failure", failure) }
+      catch (_: Exception) { android.util.Log.e("DiwanDownloader", "Cannot persist service failure") }
       finishTransfer(id, token)
     }
     return START_NOT_STICKY // No OS restart of work and no boot receiver.
@@ -136,7 +136,7 @@ class DownloadService : Service() {
     val token = currentToken
     if (id != null && token != null) {
       try { DownloadCoordinator.timeout(applicationContext, id, token, "E_FGS_TIMEOUT") }
-      catch (e: Exception) { android.util.Log.e("DiwanDownloader", "Cannot persist Android timeout", e) }
+      catch (_: Exception) { android.util.Log.e("DiwanDownloader", "Cannot persist Android timeout") }
     }
     release()
     currentId = null
@@ -159,7 +159,7 @@ class DownloadService : Service() {
     val token = currentToken
     if (id != null && token != null) {
       try { DownloadCoordinator.timeout(applicationContext, id, token, "E_SERVICE_STOPPED") }
-      catch (e: Exception) { android.util.Log.e("DiwanDownloader", "Cannot persist service destruction", e) }
+      catch (_: Exception) { android.util.Log.e("DiwanDownloader", "Cannot persist service destruction") }
     }
     release()
     super.onDestroy()

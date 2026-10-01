@@ -25,6 +25,19 @@ const OWNED_ID = /^yt-local-\d+-[a-z0-9]+$/;
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 const POLL_MS = 750;
 const TERMINAL_RELEASE_TIMEOUT_MS = 10_000;
+const STORAGE_STAGES = [
+  'STORE_INIT', 'JOURNAL_READ', 'JOURNAL_WRITE', 'JOURNAL_SYNC', 'JOURNAL_DELETE',
+  'PROGRESS_SAVE', 'STAGE_CREATE', 'AUDIO_EXISTS', 'WITNESS_CREATE', 'WITNESS_COPY',
+  'WITNESS_VERIFY', 'WITNESS_STAT', 'WITNESS_SYNC', 'PUBLICATION_LINK',
+  'PUBLICATION_JOURNAL', 'COMPLETION_JOURNAL', 'ENGINE_INSTALL_SYNC',
+] as const;
+const STORAGE_ERRNOS = [
+  'ENOSPC', 'EDQUOT', 'EACCES', 'EPERM', 'EROFS', 'EEXIST', 'ENOENT',
+  'EXDEV', 'EOPNOTSUPP', 'EIO', 'ENOTDIR', 'UNKNOWN',
+] as const;
+const STORAGE_DIAGNOSTIC = new RegExp(
+  `^E_STORAGE_STAGE_ERRNO:(${STORAGE_STAGES.join('|')}):(${STORAGE_ERRNOS.join('|')})$`,
+);
 
 /** Android never silently falls back to the cloud if this native module is absent. */
 export const usesDeviceYoutubeDownloads = () => Platform.OS === 'android';
@@ -142,6 +155,13 @@ function nativeErrorCode(error: unknown): string {
 
 function downloadError(error: unknown): Error {
   const code = nativeErrorCode(error);
+  const storageDiagnostic = STORAGE_DIAGNOSTIC.exec(code);
+  if (storageDiagnostic && storageDiagnostic[0] === code) {
+    const message = storageDiagnostic[2] === 'ENOSPC' || storageDiagnostic[2] === 'EDQUOT'
+      ? 'تعذر حفظ الصوت على الجهاز بسبب نفاد المساحة أو الحصة التخزينية.'
+      : 'تعذر حفظ الصوت على الجهاز.';
+    return new Error(`${message} رمز التشخيص: ${code}.`);
+  }
   const messages: Record<string, string> = {
     E_ENGINE_UPDATE: 'تعذر تجهيز أحدث محرك لتنزيل يوتيوب. أرسل رمز التشخيص إلى الدعم: E_ENGINE_UPDATE.',
     E_DOWNLOADER_INIT: 'تعذرت تهيئة محمّل yt-dlp على الجهاز. أرسل رمز التشخيص إلى الدعم: E_DOWNLOADER_INIT.',
@@ -154,7 +174,7 @@ function downloadError(error: unknown): Error {
     E_CANCELLED: 'تم إلغاء تنزيل الصوت.',
     E_BUSY: 'يوجد تنزيل صوت آخر قيد التنفيذ. انتظر اكتماله أو ألغِه ثم أعد المحاولة.',
     E_INVALID_URL: 'رابط فيديو يوتيوب غير صالح.',
-    E_STORAGE: 'تعذر حفظ الصوت على الجهاز. تحقق من المساحة المتاحة ثم أعد المحاولة.',
+    E_STORAGE: 'تعذر حفظ الصوت على الجهاز. رمز التشخيص: E_STORAGE.',
     E_DOWNLOAD_FAILED: 'تعذر تنزيل الصوت من يوتيوب على الجهاز. تحقق من الإنترنت؛ قد يكون المقطع غير متاح أو غير مدعوم.',
     E_FOREGROUND_REQUIRED: 'افتح التطبيق لبدء تنزيل الصوت؛ لا يمكن بدء تنزيل جديد في الخلفية.',
     E_INTERRUPTED: 'انقطع تنزيل الصوت. أعد المحاولة يدويًا بمعرّف تنزيل جديد.',
@@ -163,7 +183,7 @@ function downloadError(error: unknown): Error {
   };
   if (code === 'E_CANCELLED') return abortError();
   if (Object.prototype.hasOwnProperty.call(messages, code)) return new Error(messages[code]);
-  return new Error('تعذر تنزيل الصوت على الجهاز. تحقق من الإنترنت والمساحة المتاحة، ثم أعد المحاولة.');
+  return new Error('تعذر تنزيل الصوت على الجهاز. تحقق من الإنترنت ثم أعد المحاولة.');
 }
 
 function operationError(operation: DeviceYoutubeOperation): Error {

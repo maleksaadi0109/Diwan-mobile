@@ -53,7 +53,9 @@ internal object DownloadEngine {
 
   fun run(context: Context, transfer: Transfer, stage: File, progress: (Double) -> Unit): Long {
     transfer.check()
-    if (!stage.mkdirs()) throw DownloadError("E_STORAGE", "Unable to create staging directory")
+    val stageCreated = try { stage.mkdirs() }
+      catch (e: Exception) { throw StorageFailure.wrap(StorageStage.STAGE_CREATE, e) }
+    if (!stageCreated) throw StorageFailure.known(StorageStage.STAGE_CREATE, "UNKNOWN")
     try {
       PinnedEngine.recoverBeforeInit(context) { transfer.check() }
     } catch (e: DownloadError) {
@@ -65,7 +67,7 @@ internal object DownloadEngine {
       YoutubeDL.getInstance().init(context)
     } catch (e: Exception) {
       transfer.check()
-      android.util.Log.e("DiwanDownloader", "yt-dlp initialization failed", e)
+      android.util.Log.e("DiwanDownloader", "yt-dlp initialization failed")
       throw DownloadError("E_DOWNLOADER_INIT", "Unable to initialize the yt-dlp downloader", e)
     }
     transfer.check()
@@ -73,7 +75,7 @@ internal object DownloadEngine {
       FFmpeg.getInstance().init(context)
     } catch (e: Exception) {
       transfer.check()
-      android.util.Log.e("DiwanDownloader", "FFmpeg initialization failed", e)
+      android.util.Log.e("DiwanDownloader", "FFmpeg initialization failed")
       throw DownloadError("E_CONVERTER_INIT", "Unable to initialize the FFmpeg audio converter", e)
     }
     transfer.check()

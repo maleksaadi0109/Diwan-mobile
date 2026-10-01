@@ -33,7 +33,7 @@ internal object DownloadCoordinator {
       throw DownloadError("E_BUSY", "Another audio download is in progress")
     }
     val r = DownloadRecord(id, canonical)
-    if (s.finalFile(r).exists()) throw DownloadError("E_STORAGE", "Audio already exists for this recording")
+    if (s.finalFile(r).exists()) throw StorageFailure.known(StorageStage.AUDIO_EXISTS, "EEXIST")
     s.save(r)
     try {
       val intent = Intent(context, DownloadService::class.java).setAction(DownloadService.START)
@@ -116,8 +116,8 @@ internal object DownloadCoordinator {
           DownloadEngine.kill(transfer) // Repeated: handles cancel racing execute's process registration.
           service.finishTransfer(id, token)
         }
-      } catch (e: Exception) {
-        android.util.Log.e("DiwanDownloader", "Download watchdog failed", e)
+      } catch (_: Exception) {
+        android.util.Log.e("DiwanDownloader", "Download watchdog failed")
       }
     }, 0, 500, TimeUnit.MILLISECONDS)
     thread(name = "diwan-download-engine", isDaemon = true) {
@@ -128,7 +128,7 @@ internal object DownloadCoordinator {
             // Persist at whole-percent boundaries to avoid excessive flash writes.
             if ((progress * 100).toInt() > (r.progress * 100).toInt()) {
               r.progress = progress
-              s.save(r)
+              s.save(r, StorageStage.PROGRESS_SAVE)
               service.showProgress(id, token, progress)
             }
           }
@@ -150,8 +150,8 @@ internal object DownloadCoordinator {
               (e as? DownloadError)?.errorCode ?: if (listOf("login", "sign in", "cookies").any { message.contains(it, true) })
                 "E_LOGIN_REQUIRED" else "E_DOWNLOAD_FAILED"
           }
-          try { s.save(r) } catch (failure: Exception) {
-            android.util.Log.e("DiwanDownloader", "Cannot persist terminal download state", failure)
+          try { s.save(r) } catch (_: Exception) {
+            android.util.Log.e("DiwanDownloader", "Cannot persist terminal download state")
           }
         }
       } finally {
@@ -160,8 +160,8 @@ internal object DownloadCoordinator {
           try { s.cleanup(r, keepWitness = s.ownsFinal(r)) }
           catch (e: Exception) {
             r.errorCode = "E_CLEANUP"
-            try { s.save(r) } catch (failure: Exception) {
-              android.util.Log.e("DiwanDownloader", "Cannot persist cleanup failure", failure)
+            try { s.save(r) } catch (_: Exception) {
+              android.util.Log.e("DiwanDownloader", "Cannot persist cleanup failure")
             }
           }
           active = null

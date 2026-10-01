@@ -78,7 +78,7 @@ internal object PinnedEngine {
       } catch (e: DownloadError) {
         atomic.failWrite(output)
         output = null
-        if (e.errorCode == "E_STORAGE") throw installFailure()
+        if (e.errorCode == "E_STORAGE" || StorageFailure.isDiagnostic(e.errorCode)) throw installFailure()
         throw e
       } catch (_: Exception) {
         atomic.failWrite(output)
@@ -86,7 +86,7 @@ internal object PinnedEngine {
         throw installFailure()
       }
       try {
-        DownloadStore.syncDirectory(directory)
+        DownloadStore.syncDirectory(directory, StorageStage.ENGINE_INSTALL_SYNC)
       } catch (_: Exception) {
         throw installFailure()
       }

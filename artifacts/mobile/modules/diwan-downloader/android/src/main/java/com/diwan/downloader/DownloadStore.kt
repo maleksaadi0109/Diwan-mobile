@@ -7,6 +7,7 @@ import android.system.OsConstants
 import android.util.AtomicFile
 import org.json.JSONObject
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.util.UUID
 
@@ -35,11 +36,12 @@ internal class DownloadStore(private val context: Context) {
   val records = linkedMapOf<String, DownloadRecord>()
 
   init {
-    if ((!root.isDirectory && !root.mkdirs()) || (!target.isDirectory && !target.mkdirs())) {
-      throw DownloadError("E_STORAGE", "Unable to create download storage")
-    }
+    ensureDirectory(root)
+    ensureDirectory(target)
     // Include AtomicFile backup names so an interrupted first write is recovered too.
-    val names = root.listFiles() ?: throw DownloadError("E_STORAGE", "Cannot read download journal")
+    val names = try { root.listFiles() }
+      catch (e: Exception) { throw StorageFailure.wrap(StorageStage.JOURNAL_READ, e) }
+      ?: throw StorageFailure.known(StorageStage.JOURNAL_READ, "UNKNOWN")
     // A .new without base/backup is an uncommitted first write: no work was authorized.
     names.filter { it.name.endsWith(".json.new") }.forEach {
       val base = File(root, it.name.removeSuffix(".new"))
@@ -63,7 +65,9 @@ internal class DownloadStore(private val context: Context) {
           records[id] = record
         } catch (e: Exception) {
           // Never guess ownership or erase a corrupt record.
-          throw DownloadError("E_STORAGE", "Download journal is unreadable: $name", e)
+          if (e is DownloadError) throw e
+          if (e is FileNotFoundException) throw StorageFailure.known(StorageStage.JOURNAL_READ, "ENOENT")
+          throw StorageFailure.wrap(StorageStage.JOURNAL_READ, e)
         }
       }
     records.values.toList().forEach { record ->
@@ -89,21 +93,43 @@ internal class DownloadStore(private val context: Context) {
     }
   }
 
+  private fun ensureDirectory(directory: File) {
+    try {
+      if (directory.exists() && !directory.isDirectory) {
+        throw StorageFailure.known(StorageStage.STORE_INIT, "ENOTDIR")
+      }
+      if (!directory.isDirectory && !directory.mkdirs()) {
+        throw StorageFailure.known(StorageStage.STORE_INIT, "UNKNOWN")
+      }
+      if (!directory.isDirectory) throw StorageFailure.known(StorageStage.STORE_INIT, "UNKNOWN")
+    } catch (e: DownloadError) {
+      throw e
+    } catch (e: Exception) {
+      throw StorageFailure.wrap(StorageStage.STORE_INIT, e)
+    }
+  }
+
   fun stage(r: DownloadRecord) = File(context.cacheDir, "diwan-download-${r.token}")
   fun witness(r: DownloadRecord) = File(target, ".diwan-${r.token}.mp3")
   fun finalFile(r: DownloadRecord) = File(target, "${r.recordingId}.mp3")
-  fun save(r: DownloadRecord) {
+  fun save(r: DownloadRecord, stage: StorageStage = StorageStage.JOURNAL_WRITE) {
     val file = AtomicFile(File(root, "${r.recordingId}.json"))
     var stream: FileOutputStream? = null
     try {
       stream = file.startWrite()
       stream.write(r.json().toString().toByteArray(Charsets.UTF_8))
       file.finishWrite(stream)
-      syncDirectory(root)
+      syncDirectory(root, stage)
       records[r.recordingId] = r
     } catch (e: Exception) {
-      file.failWrite(stream)
-      throw DownloadError("E_STORAGE", "Cannot persist download state", e)
+      try {
+        file.failWrite(stream)
+      } catch (failure: Exception) {
+        if (e !is DownloadError) failure.addSuppressed(e)
+        throw StorageFailure.wrap(stage, failure)
+      }
+      if (e is DownloadError) throw e
+      throw StorageFailure.wrap(stage, e)
     }
   }
 
@@ -121,24 +147,37 @@ internal class DownloadStore(private val context: Context) {
   fun publish(r: DownloadRecord) {
     val source = File(stage(r), "audio.mp3")
     val temp = witness(r)
-    if (!temp.createNewFile()) throw DownloadError("E_STORAGE", "Publication witness already exists")
-    source.inputStream().use { input -> FileOutputStream(temp).use { output ->
-      input.copyTo(output)
-      output.fd.sync()
-    } }
-    if (temp.length() != source.length()) throw DownloadError("E_STORAGE", "Incomplete audio copy")
-    val stat = Os.lstat(temp.absolutePath)
+    val created = try { temp.createNewFile() }
+      catch (e: Exception) { throw StorageFailure.wrap(StorageStage.WITNESS_CREATE, e) }
+    if (!created) throw StorageFailure.known(StorageStage.WITNESS_CREATE, "EEXIST")
+    if (!source.exists()) throw StorageFailure.known(StorageStage.WITNESS_COPY, "ENOENT")
+    try {
+      source.inputStream().use { input -> FileOutputStream(temp).use { output -> input.copyTo(output) } }
+    } catch (e: Exception) {
+      throw StorageFailure.wrap(StorageStage.WITNESS_COPY, e)
+    }
+    try {
+      FileOutputStream(temp, true).use { it.fd.sync() }
+    } catch (e: Exception) {
+      throw StorageFailure.wrap(StorageStage.WITNESS_SYNC, e)
+    }
+    if (!source.exists()) throw StorageFailure.known(StorageStage.WITNESS_VERIFY, "ENOENT")
+    val verified = try { temp.length() == source.length() }
+      catch (e: Exception) { throw StorageFailure.wrap(StorageStage.WITNESS_VERIFY, e) }
+    if (!verified) throw StorageFailure.known(StorageStage.WITNESS_VERIFY, "UNKNOWN")
+    val stat = try { Os.lstat(temp.absolutePath) }
+      catch (e: Exception) { throw StorageFailure.wrap(StorageStage.WITNESS_STAT, e) }
     r.device = stat.st_dev
     r.inode = stat.st_ino
-    syncDirectory(target)
-    save(r) // Durable witness identity and duration BEFORE link, closing the publication crash window.
+    syncDirectory(target, StorageStage.WITNESS_SYNC)
+    save(r, StorageStage.PUBLICATION_JOURNAL) // Durable witness identity and duration BEFORE link, closing the publication crash window.
     try { Os.link(temp.absolutePath, finalFile(r).absolutePath) }
-    catch (e: Exception) { throw DownloadError("E_STORAGE", "Cannot publish audio (file may already exist)", e) }
-    syncDirectory(target)
+    catch (e: Exception) { throw StorageFailure.wrap(StorageStage.PUBLICATION_LINK, e) }
+    syncDirectory(target, StorageStage.PUBLICATION_LINK)
     r.state = "completed"
     r.progress = 1.0
     r.errorCode = null
-    save(r)
+    save(r, StorageStage.COMPLETION_JOURNAL)
   }
 
   fun cleanup(r: DownloadRecord, keepWitness: Boolean = false) {
@@ -146,14 +185,14 @@ internal class DownloadStore(private val context: Context) {
     if (stage.exists() && !stage.deleteRecursively()) throw DownloadError("E_CLEANUP", "Cannot remove download staging files")
     val temp = witness(r)
     if (!keepWitness && temp.exists() && !temp.delete()) throw DownloadError("E_CLEANUP", "Cannot remove publication witness")
-    syncDirectory(target)
+    syncDirectory(target, StorageStage.WITNESS_SYNC)
   }
 
   fun remove(r: DownloadRecord, discard: Boolean) {
     if (discard && finalFile(r).exists() && !r.adopted) {
       if (ownsFinal(r)) {
         if (!finalFile(r).delete()) throw DownloadError("E_CLEANUP", "Cannot remove unadopted audio")
-        syncDirectory(target)
+        syncDirectory(target, StorageStage.WITNESS_SYNC)
       } else if (r.state == "completed") {
         throw DownloadError("E_PROVENANCE", "Refusing to delete audio without an ownership witness")
       }
@@ -167,9 +206,16 @@ internal class DownloadStore(private val context: Context) {
   }
 
   private fun erase(r: DownloadRecord) {
-    AtomicFile(File(root, "${r.recordingId}.json")).delete()
-    if (File(root, "${r.recordingId}.json").exists()) throw DownloadError("E_STORAGE", "Cannot remove download journal")
-    syncDirectory(root)
+    try {
+      AtomicFile(File(root, "${r.recordingId}.json")).delete()
+      if (File(root, "${r.recordingId}.json").exists()) {
+        throw StorageFailure.known(StorageStage.JOURNAL_DELETE, "UNKNOWN")
+      }
+    } catch (e: Exception) {
+      if (e is DownloadError) throw e
+      throw StorageFailure.wrap(StorageStage.JOURNAL_DELETE, e)
+    }
+    syncDirectory(root, StorageStage.JOURNAL_DELETE)
     records.remove(r.recordingId)
   }
 
@@ -185,17 +231,27 @@ internal class DownloadStore(private val context: Context) {
 
   companion object {
     fun validateId(id: String) {
-      if (!Regex("[A-Za-z0-9_-]{1,100}").matches(id)) throw DownloadError("E_STORAGE", "Invalid recording ID")
+      if (!Regex("[A-Za-z0-9_-]{1,100}").matches(id)) throw DownloadError("E_STORAGE", "Invalid recording identifier")
     }
-    fun syncDirectory(directory: File) {
-      val fd = Os.open(directory.absolutePath, OsConstants.O_RDONLY, 0)
+    fun syncDirectory(directory: File, stage: StorageStage = StorageStage.JOURNAL_SYNC) {
+      var fd = -1
+      var failure: Exception? = null
       try {
+        fd = Os.open(directory.absolutePath, OsConstants.O_RDONLY, 0)
         if (!OsConstants.S_ISDIR(Os.fstat(fd).st_mode)) {
-          throw DownloadError("E_STORAGE", "Cannot sync a non-directory path")
+          throw StorageFailure.known(stage, "ENOTDIR")
         }
         Os.fsync(fd)
-      } finally {
-        Os.close(fd)
+      } catch (e: Exception) {
+        failure = e
+      }
+      if (fd >= 0) {
+        try { Os.close(fd) }
+        catch (e: Exception) { if (failure == null) failure = e }
+      }
+      failure?.let {
+        if (it is DownloadError) throw it
+        throw StorageFailure.wrap(stage, it)
       }
     }
   }

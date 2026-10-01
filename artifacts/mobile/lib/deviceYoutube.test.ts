@@ -315,6 +315,72 @@ describe('durable device operations', () => {
     expect(native.start).toHaveBeenCalledOnce();
   });
 
+  it('retains the failed 99% journal and exposes its fixed progress-save storage diagnostic', async () => {
+    const code = 'E_STORAGE_STAGE_ERRNO:PROGRESS_SAVE:ENOSPC';
+    const operation = entry('failed', { progress: 0.99, errorCode: code });
+    const { native } = nativeWith([operation]);
+    let failure: unknown;
+    try {
+      await downloadYoutubeAudioOnDevice(URL, { recordingId: ID });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message)
+      .toBe(`تعذر حفظ الصوت على الجهاز بسبب نفاد المساحة أو الحصة التخزينية. رمز التشخيص: ${code}.`);
+    expect(native.start).not.toHaveBeenCalled();
+    expect(native.acknowledge).not.toHaveBeenCalled();
+    expect(native.discard).not.toHaveBeenCalled();
+    expect((await native.list())[0].progress).toBe(0.99);
+  });
+
+  it.each([
+    ['ENOSPC', true],
+    ['EDQUOT', true],
+    ['EACCES', false],
+    ['EPERM', false],
+    ['EXDEV', false],
+    ['EEXIST', false],
+  ])('reports low storage only for allowlisted capacity errno %s', async (errno, lowStorage) => {
+    const code = `E_STORAGE_STAGE_ERRNO:PUBLICATION_LINK:${errno}`;
+    nativeWith([entry('failed', { progress: 0.99, errorCode: code })]);
+    let failure: unknown;
+    try {
+      await downloadYoutubeAudioOnDevice(URL, { recordingId: ID });
+    } catch (error) {
+      failure = error;
+    }
+    const message = (failure as Error).message;
+    expect(message).toContain(code);
+    expect(message.includes('نفاد المساحة')).toBe(lowStorage);
+  });
+
+  it.each([
+    'E_STORAGE_STAGE_ERRNO:UNKNOWN_STAGE:ENOSPC',
+    'E_STORAGE_STAGE_ERRNO:PROGRESS_SAVE:ENO_PRIVATE',
+    'E_STORAGE_STAGE_ERRNO:PUBLICATION_LINK:EPERM\n',
+    'E_STORAGE_STAGE_ERRNO:PROGRESS_SAVE:ENOSPC\nsensitive path',
+    'E_STORAGE_STAGE_ERRNO:PROGRESS_SAVE:ENOSPC sensitive message',
+  ])('does not expose malformed or injected storage diagnostic %s', async (code) => {
+    nativeWith([entry('failed', { errorCode: code })]);
+    let failure: unknown;
+    try {
+      await downloadYoutubeAudioOnDevice(URL, { recordingId: ID });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).not.toContain(code);
+    expect((failure as Error).message).not.toContain('sensitive');
+    expect((failure as Error).message).not.toContain('UNKNOWN_STAGE');
+  });
+
+  it('maps legacy E_STORAGE to neutral text without implying low space', async () => {
+    nativeWith([entry('failed', { errorCode: 'E_STORAGE' })]);
+    await expect(downloadYoutubeAudioOnDevice(URL, { recordingId: ID }))
+      .rejects.toThrow('تعذر حفظ الصوت على الجهاز. رمز التشخيص: E_STORAGE.');
+  });
+
   it('describes bundled engine installation failures without suggesting an updater network request', async () => {
     const { native } = nativeWith([entry('failed', { errorCode: 'E_ENGINE_INSTALL' })]);
     await expect(downloadYoutubeAudioOnDevice(URL, { recordingId: ID }))

@@ -43,7 +43,9 @@ class DownloadStoreTest {
     try {
       DownloadStore.syncDirectory(regularFile)
       fail("must reject regular file")
-    } catch (_: DownloadError) {}
+    } catch (error: DownloadError) {
+      assertEquals("E_STORAGE_STAGE_ERRNO:JOURNAL_SYNC:ENOTDIR", error.errorCode)
+    }
     assertEquals("keep", regularFile.readText())
   }
 
@@ -77,7 +79,10 @@ class DownloadStoreTest {
     val r = record()
     staged(s, r)
     s.finalFile(r).writeText("preexisting")
-    try { s.publish(r); fail("must reject existing final") } catch (_: DownloadError) {}
+    try { s.publish(r); fail("must reject existing final") }
+    catch (error: DownloadError) {
+      assertEquals("E_STORAGE_STAGE_ERRNO:PUBLICATION_LINK:EEXIST", error.errorCode)
+    }
     r.state = "failed"
     s.save(r)
     s.remove(r, true)

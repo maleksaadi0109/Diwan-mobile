@@ -95,7 +95,15 @@ The cause was Android's `ZipFile` rejecting the official engine's Python launche
 prefix. The versionCode 5 correction preserves the full engine digest and validates
 its ZIP body with a bounded streaming parser. Run `pnpm run test:engine-zip` from
 `artifacts/mobile` with JDK 17; these checks also run before Android EAS compilation.
-They pass on the exact official asset but do not replace device/lifecycle tests.
+They passed on the exact official asset locally and in the versionCode 5 cloud
+build. That APK compiled successfully; inspection confirmed the corrected validator,
+unchanged engine digest and foreground-service manifest. These checks do not
+replace device/lifecycle tests, which remain pending for this correction.
+An installed versionCode 5 attempt reached 99% and then reported a generic storage
+failure despite available space. VersionCode 6 adds safe stage/errno diagnostics
+and removes misleading low-space wording except when the OS reports space/quota
+exhaustion. It does not change no-overwrite publication or promise that the
+underlying device failure is fixed; its native build and device checks are pending.
 Web preview/Expo Go cannot verify this native module. Do not treat the checklist
 below as a record of successful device tests.
 

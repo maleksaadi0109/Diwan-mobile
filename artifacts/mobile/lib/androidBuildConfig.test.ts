@@ -45,10 +45,10 @@ describe('local Android module build metadata', () => {
       expect(engine).toContain(`"${code}"`);
     }
     expect(engine).toMatch(
-      /YoutubeDL\.getInstance\(\)\.init\(context\)\s*\}\s*catch \(e: Exception\) \{\s*transfer\.check\(\)\s*android\.util\.Log\.e\("DiwanDownloader", "yt-dlp initialization failed", e\)\s*throw DownloadError\("E_DOWNLOADER_INIT"/,
+      /YoutubeDL\.getInstance\(\)\.init\(context\)\s*\}\s*catch \(e: Exception\) \{\s*transfer\.check\(\)\s*android\.util\.Log\.e\("DiwanDownloader", "yt-dlp initialization failed"\)\s*throw DownloadError\("E_DOWNLOADER_INIT"/,
     );
     expect(engine).toMatch(
-      /FFmpeg\.getInstance\(\)\.init\(context\)\s*\}\s*catch \(e: Exception\) \{\s*transfer\.check\(\)\s*android\.util\.Log\.e\("DiwanDownloader", "FFmpeg initialization failed", e\)\s*throw DownloadError\("E_CONVERTER_INIT"/,
+      /FFmpeg\.getInstance\(\)\.init\(context\)\s*\}\s*catch \(e: Exception\) \{\s*transfer\.check\(\)\s*android\.util\.Log\.e\("DiwanDownloader", "FFmpeg initialization failed"\)\s*throw DownloadError\("E_CONVERTER_INIT"/,
     );
     expect(engine).toContain('PinnedEngine.recoverBeforeInit(context) { transfer.check() }');
     expect(engine).toContain('PinnedEngine.install(context) { transfer.check() }');
@@ -61,6 +61,34 @@ describe('local Android module build metadata', () => {
     expect(engine).not.toMatch(/updateYoutubeDL|\.version\(context\)|getSharedPreferences/);
     expect(engine).not.toMatch(/UnknownHostException|SSLException|UpdateChannel/);
     expect(engine).not.toMatch(/catch\s*\([^)]*Throwable/);
+  });
+
+  it('uses fixed allowlisted storage diagnostics without throwable logging', () => {
+    const helper = readFileSync(
+      new URL('../modules/diwan-downloader/android/src/main/java/com/diwan/downloader/StorageFailure.kt', import.meta.url),
+      'utf8',
+    );
+    expect(helper).toContain('E_STORAGE_STAGE_ERRNO');
+    expect(helper).toContain('Log.e(TAG, code)');
+    expect(helper).toContain('OsConstants.ENOSPC');
+    expect(helper).toContain('OsConstants.EDQUOT');
+    expect(helper).toContain('OsConstants.EOPNOTSUPP');
+    expect(helper).toContain('"UNKNOWN"');
+    expect(helper).not.toMatch(/Log\.[iwe]\([^)]*,\s*(cause|e|failure)\s*\)/);
+  });
+
+  it('labels progress and publication journal writes with their native operation stages', () => {
+    const coordinator = readFileSync(
+      new URL('../modules/diwan-downloader/android/src/main/java/com/diwan/downloader/DownloadCoordinator.kt', import.meta.url),
+      'utf8',
+    );
+    const store = readFileSync(
+      new URL('../modules/diwan-downloader/android/src/main/java/com/diwan/downloader/DownloadStore.kt', import.meta.url),
+      'utf8',
+    );
+    expect(coordinator).toContain('s.save(r, StorageStage.PROGRESS_SAVE)');
+    expect(store).toContain('save(r, StorageStage.PUBLICATION_JOURNAL)');
+    expect(store).toContain('save(r, StorageStage.COMPLETION_JOURNAL)');
   });
 
   it('pins and atomically verifies the APK zipapp without updater metadata or network access', () => {
