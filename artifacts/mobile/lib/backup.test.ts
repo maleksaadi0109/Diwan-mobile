@@ -107,6 +107,11 @@ import {
 const local = (id: string): Recording => ({
   id, audioUrl: `file:///documents/recording-audio/${id}.mp3`, durationMs: 900,
 });
+const nativeLocal = (id = 'yt-local-1234-abc123'): Recording => ({
+  id,
+  audioUrl: `file:///documents/recording-audio/.diwan-v2/${id}/01234567-89ab-cdef-0123-456789abcdef/audio.mp3`,
+  durationMs: 900,
+});
 const remote = (id: string): Recording => ({
   ...local(id), serverAudioUrl: `https://example.com/${id}.mp3`,
 });
@@ -377,6 +382,41 @@ describe('backup compatibility and audio restore', () => {
     expect(restored.verses).toEqual(original.verses);
     expect(mocks.files.get(first.audioUrl)).toBe('YQ==');
     expect(mocks.files.get(second.audioUrl)).toBe('Yg==');
+  });
+
+  it('exports embedded audio from a nested native bundle and restores it to the flat archive target', async () => {
+    const native = nativeLocal();
+    const original = poem('native-poem', native);
+    mocks.files.set(native.audioUrl, 'bmF0aXZl');
+    mocks.binary.set(native.audioUrl, { bytes: new Uint8Array([110, 97, 116, 105, 118, 101]), size: 6 });
+    mocks.storage.set('diwan.mobile.poems.v1', JSON.stringify([original]));
+
+    const exported = parseBackupJson(await createBackupJson());
+    expect(exported.audioFiles).toEqual([
+      { poemId: 'native-poem', recordingId: native.id, base64: 'bmF0aXZl' },
+    ]);
+
+    const archiveUri = await createBackupArchive();
+    expect(mocks.binary.get(archiveUri)?.size).toBeGreaterThan(6);
+    mocks.pickedUri = archiveUri;
+    const picked = await pickBackup();
+    if (!picked || picked.kind !== 'archive') throw new Error('Expected archive');
+    mocks.files.delete(native.audioUrl);
+    mocks.binary.delete(native.audioUrl);
+    const [restored] = await restoreBackupAudio(picked.backup, new Set(), picked);
+    const flatTarget = `file:///documents/recording-audio/${native.id}.mp3`;
+    expect(restored.recording?.audioUrl).toBe(flatTarget);
+    expect(mocks.binary.get(flatTarget)?.bytes.slice(0, 6)).toEqual(new Uint8Array([110, 97, 116, 105, 118, 101]));
+    expect(mocks.binary.has(native.audioUrl)).toBe(false);
+    expect(mocks.files.has(flatTarget)).toBe(false);
+    expect(mocks.deleted).not.toContain(native.audioUrl);
+  });
+
+  it('fails export for a missing nested native bundle without trying its server URL', async () => {
+    const missing = { ...nativeLocal(), serverAudioUrl: 'https://example.com/remote.mp3' };
+    mocks.storage.set('diwan.mobile.poems.v1', JSON.stringify([poem('missing-native', missing)]));
+    await expect(createBackupJson()).rejects.toThrow(missing.id);
+    expect(mocks.files.has('file:///documents/recording-audio/missing.mp3')).toBe(false);
   });
 
   it('skips an existing poem and never replaces its colliding audio file', async () => {

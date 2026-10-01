@@ -2,6 +2,11 @@ import { AppState, PermissionsAndroid, Platform } from 'react-native';
 import { requireOptionalNativeModule } from 'expo';
 import * as FileSystem from 'expo-file-system/legacy';
 import type { Recording } from './types';
+import {
+  isCanonicalDeviceAudioToken,
+  isOwnedDeviceRecordingId,
+  validateDeviceAudioUri,
+} from './sharedDeviceAudioPaths';
 
 export type DeviceYoutubeOperation = {
   recordingId: string;
@@ -9,6 +14,8 @@ export type DeviceYoutubeOperation = {
   state: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
   progress: number;
   audioUrl?: string;
+  storageVersion?: number;
+  token?: string;
   durationMs?: number;
   errorCode?: string;
 };
@@ -21,7 +28,6 @@ interface DeviceDownloader {
   discard(recordingId: string): Promise<void>;
 }
 
-const OWNED_ID = /^yt-local-\d+-[a-z0-9]+$/;
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
 const POLL_MS = 750;
 const TERMINAL_RELEASE_TIMEOUT_MS = 10_000;
@@ -72,7 +78,7 @@ export function createDeviceYoutubeRecordingId(): string {
 }
 
 function localUri(id: string): string {
-  if (!OWNED_ID.test(id) || !FileSystem.documentDirectory) throw new Error('مسار التسجيل المحلي غير صالح.');
+  if (!isOwnedDeviceRecordingId(id) || !FileSystem.documentDirectory) throw new Error('مسار التسجيل المحلي غير صالح.');
   return `${FileSystem.documentDirectory}recording-audio/${id}.mp3`;
 }
 
@@ -109,11 +115,22 @@ export async function acknowledgeDeviceYoutubeRecording(id: string): Promise<voi
 
 /** Native owns the journal and alone decides whether a completed file is still discardable. */
 export async function deleteDeviceYoutubeRecording(recording: Recording): Promise<void> {
-  const expected = localUri(recording.id);
-  if (recording.audioUrl !== expected) throw new Error('لا يمكن حذف تسجيل خارج مجلد التنزيل.');
+  localUri(recording.id);
+  const documentDirectory = FileSystem.documentDirectory;
+  const recordingPath = documentDirectory
+    ? validateDeviceAudioUri(documentDirectory, recording.id, recording.audioUrl)
+    : null;
+  if (!recordingPath) throw new Error('لا يمكن حذف تسجيل خارج مجلد التنزيل أو بمسار غير مملوك.');
   const native = requireDownloader();
   const operation = (await native.list()).find((entry) => entry.recordingId === recording.id);
-  if (!operation || operation.state !== 'completed' || operation.audioUrl !== expected) {
+  const operationPath = operation?.audioUrl && documentDirectory
+    ? validatedOperationAudioPath(operation, documentDirectory)
+    : null;
+  if (!operation || operation.state !== 'completed' || !operationPath ||
+      operation.audioUrl !== recording.audioUrl || operationPath.uri !== recordingPath.uri ||
+      operationPath.storageVersion !== recordingPath.storageVersion ||
+      (operationPath.storageVersion === 2 && recordingPath.storageVersion === 2 &&
+        operationPath.token !== recordingPath.token)) {
     throw new Error('لا يمكن تنظيف ملف تنزيل محفوظ أو غير مملوك لعملية مكتملة.');
   }
   try {
@@ -195,17 +212,43 @@ function operationError(operation: DeviceYoutubeOperation): Error {
 }
 
 async function completedRecording(operation: DeviceYoutubeOperation): Promise<Recording> {
-  const audioUrl = localUri(operation.recordingId);
-  if (operation.audioUrl !== audioUrl || typeof operation.durationMs !== 'number' ||
+  localUri(operation.recordingId);
+  const documentDirectory = FileSystem.documentDirectory;
+  const validatedPath = documentDirectory
+    ? validatedOperationAudioPath(operation, documentDirectory)
+    : null;
+  if (!validatedPath || typeof operation.audioUrl !== 'string' ||
+      typeof operation.durationMs !== 'number' ||
       !Number.isFinite(operation.durationMs) || operation.durationMs <= 0 ||
       operation.durationMs > 2 * 60 * 60 * 1000) {
     throw new Error('ملف الصوت الذي أنتجه محرك التنزيل غير صالح؛ لم تتم إضافته إلى المكتبة.');
   }
+  const audioUrl = validatedPath.uri;
   const info = await FileSystem.getInfoAsync(audioUrl);
   if (!info.exists || !info.size) {
     throw new Error('ملف الصوت الذي أنتجه محرك التنزيل غير صالح؛ لم تتم إضافته إلى المكتبة.');
   }
   return { id: operation.recordingId, audioUrl, durationMs: operation.durationMs };
+}
+
+function validatedOperationAudioPath(
+  operation: DeviceYoutubeOperation,
+  documentDirectory: string,
+) {
+  const hasVersion = Object.prototype.hasOwnProperty.call(operation, 'storageVersion');
+  const hasToken = Object.prototype.hasOwnProperty.call(operation, 'token');
+  if (typeof operation.audioUrl !== 'string') return null;
+  const path = validateDeviceAudioUri(documentDirectory, operation.recordingId, operation.audioUrl);
+  if (!path) return null;
+  if (!hasVersion && !hasToken) {
+    return path.storageVersion === 1 ? path : null;
+  }
+  if (hasVersion && hasToken && operation.storageVersion === 2 &&
+      typeof operation.token === 'string' && isCanonicalDeviceAudioToken(operation.token) &&
+      path.storageVersion === 2 && path.token === operation.token) {
+    return path;
+  }
+  return null;
 }
 
 function waitForPoll(): Promise<void> {

@@ -9,7 +9,7 @@ if (!suppliedJar || !existsSync(suppliedJar)) {
   throw new Error('Provide an official Android API 36 android.jar: pnpm run test:android-storage-types /path/to/android.jar');
 }
 const native = '../modules/diwan-downloader/android/src/main/java/com/diwan/downloader/';
-const sources = ['DownloadStore.kt', 'StorageFailure.kt'].map((name) =>
+const sources = ['DownloadStore.kt', 'StorageFailure.kt', 'TokenPublication.kt'].map((name) =>
   fileURLToPath(new URL(`${native}${name}`, import.meta.url)),
 );
 const support = fileURLToPath(new URL('./AndroidStorageTypecheckSupport.kt', import.meta.url));

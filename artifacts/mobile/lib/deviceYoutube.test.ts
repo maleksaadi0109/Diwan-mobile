@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Recording } from './types';
 import type { DeviceYoutubeOperation } from './deviceYoutube';
+import {
+  isCanonicalDeviceAudioToken,
+  isOwnedDeviceRecordingId,
+} from './sharedDeviceAudioPaths';
 
 const mocks = vi.hoisted(() => ({
   platform: { OS: 'android', Version: 34 },
@@ -37,6 +41,7 @@ import {
 const VIDEO_ID = 'abcdefghijk';
 const URL = `https://www.youtube.com/watch?v=${VIDEO_ID}`;
 const ID = 'yt-local-1234-abc123';
+const TOKEN = '01234567-89ab-cdef-0123-456789abcdef';
 const ENGINE_DIAGNOSTIC_CODES = [
   'E_ENGINE_UPDATE',
   'E_DOWNLOADER_INIT',
@@ -47,11 +52,17 @@ const ENGINE_DIAGNOSTIC_CODES = [
   'E_ENGINE_INSTALL',
 ];
 const uri = (id = ID) => `file:///documents/recording-audio/${id}.mp3`;
+const nestedUri = (id = ID, token = TOKEN) =>
+  `file:///documents/recording-audio/.diwan-v2/${id}/${token}/audio.mp3`;
 const entry = (state: DeviceYoutubeOperation['state'], overrides: Partial<DeviceYoutubeOperation> = {}): DeviceYoutubeOperation => ({
   recordingId: ID, url: URL, state, progress: 0.5, ...overrides,
 });
 const completed = (overrides: Partial<DeviceYoutubeOperation> = {}) =>
   entry('completed', { progress: 1, audioUrl: uri(), durationMs: 12000, ...overrides });
+const completedV2 = (overrides: Partial<DeviceYoutubeOperation> = {}) =>
+  entry('completed', {
+    progress: 1, audioUrl: nestedUri(), durationMs: 12000, storageVersion: 2, token: TOKEN, ...overrides,
+  });
 
 function nativeWith(operations: DeviceYoutubeOperation[] = []) {
   const journal = operations;
@@ -114,6 +125,11 @@ describe('video URLs', () => {
 });
 
 describe('durable device operations', () => {
+  it.each(['\n', '\r', '\r\n'])('rejects terminal line endings in owned IDs and UUID tokens: %j', (ending) => {
+    expect(isOwnedDeviceRecordingId(`${ID}${ending}`)).toBe(false);
+    expect(isCanonicalDeviceAudioToken(`${TOKEN}${ending}`)).toBe(false);
+  });
+
   it('passively recovers nothing without native support, but refuses downloads without APK or server fallback', async () => {
     mocks.requireOptionalNativeModule.mockReturnValue(null);
     const fetcher = vi.fn();
@@ -155,6 +171,42 @@ describe('durable device operations', () => {
     expect(mocks.permissions.request).not.toHaveBeenCalled();
     expect(native.acknowledge).not.toHaveBeenCalled();
     expect(await listDeviceYoutubeOperations()).toEqual([completed()]);
+  });
+
+  it('accepts canonical v2 completion and returns its actual token-owned URI', async () => {
+    const { native } = nativeWith([completedV2()]);
+    await expect(downloadYoutubeAudioOnDevice(URL, { recordingId: ID })).resolves.toEqual({
+      id: ID, audioUrl: nestedUri(), durationMs: 12000,
+    });
+    expect(mocks.getInfoAsync).toHaveBeenCalledWith(nestedUri());
+    expect(native.acknowledge).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['foreign recording ID', { audioUrl: nestedUri('yt-local-1235-other') }],
+    ['uppercase token', { audioUrl: nestedUri(ID, TOKEN.toUpperCase()) }],
+    ['foreign token metadata', { token: 'fedcba98-7654-3210-fedc-ba9876543210' }],
+    ['encoded traversal', { audioUrl: `file:///documents/recording-audio/.diwan-v2/${ID}/../${TOKEN}/audio.mp3` }],
+    ['encoded traversal segment', { audioUrl: `file:///documents/recording-audio/.diwan-v2/${ID}/%2e%2e/${TOKEN}/audio.mp3` }],
+    ['encoded slash', { audioUrl: nestedUri().replace(ID, `${ID}%2fother`) }],
+    ['encoded token character', { audioUrl: nestedUri().replace(TOKEN, TOKEN.replace('-', '%2d')) }],
+    ['URI token with terminal LF', { audioUrl: nestedUri(ID, `${TOKEN}\n`) }],
+    ['URI token with terminal CR', { audioUrl: nestedUri(ID, `${TOKEN}\r`) }],
+    ['URI token with terminal CRLF', { audioUrl: nestedUri(ID, `${TOKEN}\r\n`) }],
+    ['operation token with terminal LF', { token: `${TOKEN}\n` }],
+    ['operation token with terminal CR', { token: `${TOKEN}\r` }],
+    ['operation token with terminal CRLF', { token: `${TOKEN}\r\n` }],
+    ['extra query', { audioUrl: `${nestedUri()}?download=1` }],
+    ['extra hash', { audioUrl: `${nestedUri()}#fragment` }],
+    ['non-directory prefix', { audioUrl: nestedUri().replace('/recording-audio/', '/recording-audio-evil/') }],
+    ['missing version', { storageVersion: undefined }],
+    ['unsupported version', { storageVersion: 1 }],
+    ['legacy URI with v2 metadata', { audioUrl: uri() }],
+  ])('rejects malformed v2 completion with %s', async (_label, changes) => {
+    const { native } = nativeWith([completedV2(changes)]);
+    await expect(downloadYoutubeAudioOnDevice(URL, { recordingId: ID })).rejects.toThrow('غير صالح');
+    expect(native.discard).not.toHaveBeenCalled();
+    expect(mocks.deleteAsync).not.toHaveBeenCalled();
   });
 
   it('never reuses an ID for another URL', async () => {
@@ -249,6 +301,24 @@ describe('durable device operations', () => {
       .rejects.toThrow('محفوظ');
     expect(native.discard).not.toHaveBeenCalled();
     expect(mocks.deleteAsync).not.toHaveBeenCalled();
+  });
+
+  it('discards a v2 result only through the matching completed native operation', async () => {
+    const { native } = nativeWith([completedV2()]);
+    await deleteDeviceYoutubeRecording({ id: ID, audioUrl: nestedUri(), durationMs: 12000 });
+    expect(native.discard).toHaveBeenCalledWith(ID);
+    expect(mocks.deleteAsync).not.toHaveBeenCalled();
+  });
+
+  it('does not compare v2 deletion against a synthesized legacy URI', async () => {
+    const { native } = nativeWith([completedV2()]);
+    await expect(deleteDeviceYoutubeRecording({ id: ID, audioUrl: uri(), durationMs: 12000 }))
+      .rejects.toThrow('محفوظ');
+    expect(native.discard).not.toHaveBeenCalled();
+    await expect(deleteDeviceYoutubeRecording({
+      id: ID, audioUrl: nestedUri(ID, 'fedcba98-7654-3210-fedc-ba9876543210'), durationMs: 12000,
+    })).rejects.toThrow('مملوك');
+    expect(native.discard).not.toHaveBeenCalled();
   });
 
   it('retries terminal E_BUSY for acknowledge and discard while native worker releases resources', async () => {

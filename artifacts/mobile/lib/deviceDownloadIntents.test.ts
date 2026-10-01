@@ -7,6 +7,11 @@ const poem: Poem = { id: 'poem', title: 'قصيدة', poetName: 'شاعر', crea
   verses: [{ id: 'verse', orderIndex: 0, text: 'نص' }] };
 const intent: DeviceDownloadIntent = { id: 'old', url: 'https://youtube.com/watch?v=abcdefghijk', poem };
 const recording = (id: string): Recording => ({ id, audioUrl: `file:///${id}.mp3`, durationMs: 1000 });
+const nestedRecording = (id: string): Recording => ({
+  id,
+  audioUrl: `file:///documents/recording-audio/.diwan-v2/${id}/01234567-89ab-cdef-0123-456789abcdef/audio.mp3`,
+  durationMs: 1000,
+});
 const completion = (id = 'old'): DeviceYoutubeOperation => ({
   recordingId: id, url: intent.url, state: 'completed', progress: 1, ...recording(id),
 });
@@ -92,6 +97,22 @@ describe('durable device download adoption', () => {
     expect(test.deps.poems()[0].recording?.id).toBe('old');
     await test.manager.recover();
     expect(test.deps.download).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the actual nested native URI through library adoption and acknowledgement', async () => {
+    const test = setup();
+    const nativeRecording = nestedRecording('old');
+    await seed(test);
+    test.setOperations([{
+      recordingId: 'old', url: intent.url, state: 'completed', progress: 1,
+      audioUrl: nativeRecording.audioUrl, storageVersion: 2,
+      token: '01234567-89ab-cdef-0123-456789abcdef', durationMs: 1000,
+    }]);
+    test.deps.download.mockResolvedValueOnce(nativeRecording);
+    await test.manager.recover();
+    expect(test.deps.poems()[0].recording).toEqual(nativeRecording);
+    expect(test.deps.acknowledge).toHaveBeenCalledWith('old');
+    expect(test.deps.discard).not.toHaveBeenCalled();
   });
 
   it('retains completion on failed library save and retries same id', async () => {
@@ -196,11 +217,16 @@ describe('durable device download adoption', () => {
   it('dismissal of an already-saved recording never discards its audio', async () => {
     const test = setup();
     await seed(test);
-    test.setOperations([completion()]);
-    test.setPoems([{ ...poem, recordings: [recording('old')] }]);
+    const saved = nestedRecording('old');
+    test.setOperations([{
+      ...completion(), audioUrl: saved.audioUrl, storageVersion: 2,
+      token: '01234567-89ab-cdef-0123-456789abcdef',
+    }]);
+    test.setPoems([{ ...poem, recordings: [saved] }]);
     await test.manager.dismiss('old');
     expect(test.deps.discard).not.toHaveBeenCalled();
     expect(test.deps.cancel).not.toHaveBeenCalled();
+    expect(test.deps.acknowledge).toHaveBeenCalledWith('old');
     expect(await test.store.list()).toEqual([]);
   });
 

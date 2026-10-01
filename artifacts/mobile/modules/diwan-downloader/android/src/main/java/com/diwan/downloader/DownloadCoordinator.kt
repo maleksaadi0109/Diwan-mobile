@@ -33,7 +33,7 @@ internal object DownloadCoordinator {
       throw DownloadError("E_BUSY", "Another audio download is in progress")
     }
     val r = DownloadRecord(id, canonical)
-    if (s.finalFile(r).exists()) throw StorageFailure.known(StorageStage.AUDIO_EXISTS, "EEXIST")
+    if (s.hasStartCollision(id)) throw StorageFailure.known(StorageStage.AUDIO_EXISTS, "EEXIST")
     s.save(r)
     try {
       val intent = Intent(context, DownloadService::class.java).setAction(DownloadService.START)
@@ -140,10 +140,10 @@ internal object DownloadCoordinator {
         }
       } catch (e: Exception) {
         synchronized(lock) {
-          // A successful link followed by failed journal write is still a valid completion.
+          // Publication can be rescued only after its durable ownership intent exists.
           if (s.ownsFinal(r)) {
             r.state = "completed"; r.progress = 1.0; r.errorCode = null
-          } else if (!r.terminal) {
+          } else if (!r.terminal || r.state == "completed") {
             r.state = if (transfer.cancelled.get() && transfer.reason == "E_CANCELLED") "cancelled" else "failed"
             val message = e.message.orEmpty()
             r.errorCode = if (transfer.cancelled.get()) transfer.reason else

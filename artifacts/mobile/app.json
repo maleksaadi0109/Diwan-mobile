@@ -20,7 +20,7 @@
     "android": {
       "backgroundColor": "#0a0b0e",
       "package": "com.diwan.arabicpoetry",
-      "versionCode": 6
+      "versionCode": 7
     },
     "web": {
       "favicon": "./assets/images/icon.png"

@@ -109,6 +109,19 @@ error; this is corrected. Its production storage code passes a partial Kotlin
 typecheck against the official API 36 platform jar. With Kotlin and that jar
 available, run `pnpm run test:android-storage-types /path/to/android.jar` from
 `artifacts/mobile`. This check does not run Android or replace a full APK build.
+The corrected versionCode 6 APK has now built successfully. Native storage
+diagnostics are present in its DEX, the pinned engine hash is unchanged, and its
+package/public signing certificate match versionCode 5. Install as an update;
+do not uninstall or clear data. Make a fresh retry to obtain the new error code.
+The original storage failure and physical-device lifecycle checks are still
+unresolved, so this is a diagnostic build, not a verified download fix.
+The device reported `PUBLICATION_LINK:EACCES` from that diagnostic build.
+VersionCode 7 prepares new-only format-2 publication using an exclusive token
+bundle, synced copies and journal-backed marker/identity/SHA-256 proof, without
+hardlink or rename. Legacy paths/journals stay unchanged; backup restores remain
+flat. All 185 mobile tests/typecheck pass and the production storage helper
+compiles against official API 36 signatures. Its full APK build and physical
+save/playback, background/restart and cancelled-transfer cleanup are pending.
 Web preview/Expo Go cannot verify this native module. Do not treat the checklist
 below as a record of successful device tests.
 

@@ -2,6 +2,10 @@ import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { File } from 'expo-file-system';
 import type { Recording } from '@/lib/types';
+import {
+  isReservedDeviceAudioUri,
+  validateDeviceAudioUri,
+} from './sharedDeviceAudioPaths';
 
 const CACHE_DIRECTORY_NAME = 'recording-audio';
 const RECORDING_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -26,6 +30,12 @@ function recordingCacheUri(recordingId: string, extension = 'mp3'): string | nul
 
 function recordingLocalUri(recording: Recording): string | null {
   const directory = cacheDirectoryUri();
+  const documentDirectory = FileSystem.documentDirectory;
+  if (documentDirectory &&
+      validateDeviceAudioUri(documentDirectory, recording.id, recording.audioUrl)?.storageVersion === 2) {
+    return recording.audioUrl;
+  }
+  if (documentDirectory && isReservedDeviceAudioUri(documentDirectory, recording.audioUrl)) return null;
   if (directory && isSafeRecordingId(recording.id) &&
       recording.audioUrl.startsWith(`${directory}${recording.id}.`)) {
     const extension = recording.audioUrl.slice(`${directory}${recording.id}.`.length);
@@ -96,7 +106,8 @@ export async function cacheRecordingAudio(recording: Recording): Promise<Recordi
 
   const targetUri = recordingCacheUri(recording.id);
   const directoryUri = cacheDirectoryUri();
-  if (!targetUri || !directoryUri) {
+  if (!targetUri || !directoryUri ||
+      (FileSystem.documentDirectory && isReservedDeviceAudioUri(FileSystem.documentDirectory, targetUri))) {
     throw new Error('Cannot cache recording: persistent app storage is unavailable.');
   }
 
@@ -132,7 +143,10 @@ export async function storeLocalRecordingAudio(recordingId: string, sourceUri: s
   const extension = fileName.split('.').pop()?.toLowerCase() ?? '';
   const target = recordingCacheUri(recordingId, extension);
   const directory = cacheDirectoryUri();
-  if (!target || !directory) throw new Error('Unsupported audio format or unavailable storage.');
+  if (!target || !directory ||
+      (FileSystem.documentDirectory && isReservedDeviceAudioUri(FileSystem.documentDirectory, target))) {
+    throw new Error('Unsupported audio format or unavailable storage.');
+  }
   const source = await FileSystem.getInfoAsync(sourceUri);
   if (!source.exists || !source.size) throw new Error('The selected audio file is empty.');
   await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
@@ -155,7 +169,10 @@ export async function getOfflineRecordingFile(recording: Recording): Promise<Fil
 export async function prepareOfflineRecordingAudio(id: string, extension: string): Promise<File> {
   const uri = recordingCacheUri(id, extension);
   const directory = cacheDirectoryUri();
-  if (!uri || !directory) throw new Error('Invalid audio recording ID or extension.');
+  if (!uri || !directory ||
+      (FileSystem.documentDirectory && isReservedDeviceAudioUri(FileSystem.documentDirectory, uri))) {
+    throw new Error('Invalid audio recording ID or extension.');
+  }
   // A different extension with the same recording ID is also an existing file.
   for (const ext of ['mp3', 'm4a', 'wav', 'aac', 'ogg', 'flac']) {
     const candidate = recordingCacheUri(id, ext)!;
