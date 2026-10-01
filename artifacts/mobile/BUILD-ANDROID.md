@@ -104,6 +104,11 @@ failure despite available space. VersionCode 6 adds safe stage/errno diagnostics
 and removes misleading low-space wording except when the OS reports space/quota
 exhaustion. It does not change no-overwrite publication or promise that the
 underlying device failure is fixed; its native build and device checks are pending.
+The first diagnostic APK build failed at compilation due to a file-descriptor type
+error; this is corrected. Its production storage code passes a partial Kotlin
+typecheck against the official API 36 platform jar. With Kotlin and that jar
+available, run `pnpm run test:android-storage-types /path/to/android.jar` from
+`artifacts/mobile`. This check does not run Android or replace a full APK build.
 Web preview/Expo Go cannot verify this native module. Do not treat the checklist
 below as a record of successful device tests.
 

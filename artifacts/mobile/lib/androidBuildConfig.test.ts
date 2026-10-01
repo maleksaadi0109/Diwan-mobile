@@ -29,7 +29,9 @@ describe('local Android module build metadata', () => {
       'utf8',
     );
     expect(store).not.toContain('OsConstants.O_DIRECTORY');
-    expect(store).toContain('OsConstants.S_ISDIR(Os.fstat(fd).st_mode)');
+    expect(store).toContain('OsConstants.S_ISDIR(Os.fstat(opened).st_mode)');
+    expect(store).toContain('var fd: java.io.FileDescriptor? = null');
+    expect(store).not.toContain('var fd = -1');
   });
 
   it('keeps native engine failures stage-specific and checks cancellation before remapping initializer exceptions', () => {

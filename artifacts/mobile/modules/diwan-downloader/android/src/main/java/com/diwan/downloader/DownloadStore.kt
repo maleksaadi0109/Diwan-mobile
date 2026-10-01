@@ -234,19 +234,20 @@ internal class DownloadStore(private val context: Context) {
       if (!Regex("[A-Za-z0-9_-]{1,100}").matches(id)) throw DownloadError("E_STORAGE", "Invalid recording identifier")
     }
     fun syncDirectory(directory: File, stage: StorageStage = StorageStage.JOURNAL_SYNC) {
-      var fd = -1
+      var fd: java.io.FileDescriptor? = null
       var failure: Exception? = null
       try {
-        fd = Os.open(directory.absolutePath, OsConstants.O_RDONLY, 0)
-        if (!OsConstants.S_ISDIR(Os.fstat(fd).st_mode)) {
+        val opened = Os.open(directory.absolutePath, OsConstants.O_RDONLY, 0)
+        fd = opened
+        if (!OsConstants.S_ISDIR(Os.fstat(opened).st_mode)) {
           throw StorageFailure.known(stage, "ENOTDIR")
         }
-        Os.fsync(fd)
+        Os.fsync(opened)
       } catch (e: Exception) {
         failure = e
       }
-      if (fd >= 0) {
-        try { Os.close(fd) }
+      fd?.let { opened ->
+        try { Os.close(opened) }
         catch (e: Exception) { if (failure == null) failure = e }
       }
       failure?.let {

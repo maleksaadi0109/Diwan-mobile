@@ -11,6 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:engine-zip": "node scripts/test-engine-zip.mjs",
+    "test:android-storage-types": "node scripts/check-android-storage-types.mjs",
     "eas-build-post-install": "node scripts/test-engine-zip.mjs"
   },
   "devDependencies": {
