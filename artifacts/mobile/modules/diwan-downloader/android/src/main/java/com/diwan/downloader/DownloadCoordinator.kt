@@ -8,7 +8,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
 
-/** Process-wide serialization includes initialization/updating, cancellation, publication and adoption. */
+/** Process-wide serialization includes initialization/engine verification, cancellation, publication and adoption. */
 internal object DownloadCoordinator {
   private val lock = Any()
   private var store: DownloadStore? = null
@@ -102,8 +102,8 @@ internal object DownloadCoordinator {
     val monitor = Executors.newSingleThreadScheduledExecutor { task ->
       Thread(task, "diwan-download-watchdog").apply { isDaemon = true }
     }
-    // This starts BEFORE engine init/updater; the service and wakelock have finite lifetimes
-    // even if the upstream metadata fetch ignores interruption. Engine ownership is retained.
+    // This starts before engine initialization; the service and wakelock have finite lifetimes
+    // even if native initialization ignores interruption. Engine ownership is retained.
     monitor.scheduleAtFixedRate({
       try {
         val expired = SystemClock.elapsedRealtime() - started >= DownloadEngine.WALL_MS

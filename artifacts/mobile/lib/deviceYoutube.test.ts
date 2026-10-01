@@ -44,6 +44,7 @@ const ENGINE_DIAGNOSTIC_CODES = [
   'E_ENGINE_UPDATE_NETWORK',
   'E_ENGINE_PACKAGE_INVALID',
   'E_ENGINE_PREFERENCE_WRITE',
+  'E_ENGINE_INSTALL',
 ];
 const uri = (id = ID) => `file:///documents/recording-audio/${id}.mp3`;
 const entry = (state: DeviceYoutubeOperation['state'], overrides: Partial<DeviceYoutubeOperation> = {}): DeviceYoutubeOperation => ({
@@ -312,6 +313,13 @@ describe('durable device operations', () => {
     expect((failure as Error).message).toContain(code);
     expect((failure as Error).message).not.toContain('sensitive native exception text');
     expect(native.start).toHaveBeenCalledOnce();
+  });
+
+  it('describes bundled engine installation failures without suggesting an updater network request', async () => {
+    const { native } = nativeWith([entry('failed', { errorCode: 'E_ENGINE_INSTALL' })]);
+    await expect(downloadYoutubeAudioOnDevice(URL, { recordingId: ID }))
+      .rejects.toThrow(/محرك yt-dlp الموثوق المضمّن.*E_ENGINE_INSTALL/);
+    expect(native.start).not.toHaveBeenCalled();
   });
 
   it.each(['E_PRIVATE_DETAIL', 'toString', 'constructor'])('does not expose arbitrary native code %s in user-facing errors', async (code) => {

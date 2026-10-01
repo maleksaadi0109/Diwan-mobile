@@ -10,12 +10,13 @@ the recording is required. YouTube may restrict individual videos.
 This native component cannot run in Expo Go or the web preview. Build a new APK
 from the updated source; publishing the API alone does not update an installed APK.
 The native library includes Python, FFmpeg and QuickJS and increases APK size.
-Before the first download (then at most daily), it checks and installs the upstream
-stable yt-dlp engine through GitHub. This needs internet access to GitHub but not
-the Diwan API. If engine preparation fails, the app reports it instead of silently
-using the obsolete bundled extractor or falling back to the server. Cancellation
-may wait for an in-flight engine update to finish. See the module README for
-upstream updater timeout and integrity limitations.
+The APK includes the verified official stable yt-dlp engine `2026.08.19` (the latest
+stable release checked on 2026-10-01). It validates the package's pinned SHA-256,
+version and required components and installs it locally before downloading.
+Engine preparation no longer requires a GitHub connection or the upstream updater.
+If installation/validation fails, the app reports it instead of using the obsolete
+library-bundled extractor or falling back to the server. Updating the pinned engine
+requires building and installing a new APK. See the module README for details.
 See `modules/diwan-downloader/README.md` for pinned versions and native limitations.
 Start downloads while the app is visible. The Android foreground service then
 owns the transfer when the screen is locked or the import page is closed, with a
@@ -85,8 +86,9 @@ Inspection of that APK confirmed the non-exported `dataSync` download service,
 required permissions, and compiled downloader, coordinator and journal classes.
 These are packaging checks, not evidence of screen-lock or recovery behavior.
 The workspace has JDK 17 for standalone checks, but no Android SDK, Gradle/adb
-or connected Android device. Later engine-stage diagnostics require a new APK
-build and have not yet been compiled or exercised on Android.
+or connected Android device. Engine-stage diagnostics also compiled in a later
+cloud APK with Android versionCode 3. The pinned-engine installer prepared for
+versionCode 4 has not yet been compiled or exercised on Android.
 Web preview/Expo Go cannot verify this native module. Do not treat the checklist
 below as a record of successful device tests.
 

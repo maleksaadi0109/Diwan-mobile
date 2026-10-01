@@ -38,12 +38,9 @@ describe('local Android module build metadata', () => {
       'utf8',
     );
     for (const code of [
-      'E_ENGINE_UPDATE',
+      'E_ENGINE_INSTALL',
       'E_DOWNLOADER_INIT',
       'E_CONVERTER_INIT',
-      'E_ENGINE_UPDATE_NETWORK',
-      'E_ENGINE_PACKAGE_INVALID',
-      'E_ENGINE_PREFERENCE_WRITE',
     ]) {
       expect(engine).toContain(`"${code}"`);
     }
@@ -53,9 +50,38 @@ describe('local Android module build metadata', () => {
     expect(engine).toMatch(
       /FFmpeg\.getInstance\(\)\.init\(context\)\s*\}\s*catch \(e: Exception\) \{\s*transfer\.check\(\)\s*android\.util\.Log\.e\("DiwanDownloader", "FFmpeg initialization failed", e\)\s*throw DownloadError\("E_CONVERTER_INIT"/,
     );
-    expect(engine).toContain('android.util.Log.e("DiwanDownloader", "Stable yt-dlp update failed", e)');
-    expect(engine).toContain('current is UnknownHostException');
-    expect(engine).toContain('current is SSLException');
+    expect(engine).toContain('PinnedEngine.recoverBeforeInit(context) { transfer.check() }');
+    expect(engine).toContain('PinnedEngine.install(context) { transfer.check() }');
+    expect(engine.indexOf('PinnedEngine.recoverBeforeInit(context)'))
+      .toBeLessThan(engine.indexOf('YoutubeDL.getInstance().init(context)'));
+    expect(engine.indexOf('YoutubeDL.getInstance().init(context)'))
+      .toBeLessThan(engine.indexOf('FFmpeg.getInstance().init(context)'));
+    expect(engine.indexOf('FFmpeg.getInstance().init(context)'))
+      .toBeLessThan(engine.indexOf('ensureCurrentEngine(context, transfer)'));
+    expect(engine).not.toMatch(/updateYoutubeDL|\.version\(context\)|getSharedPreferences/);
+    expect(engine).not.toMatch(/UnknownHostException|SSLException|UpdateChannel/);
     expect(engine).not.toMatch(/catch\s*\([^)]*Throwable/);
+  });
+
+  it('pins and atomically verifies the APK zipapp without updater metadata or network access', () => {
+    const installer = readFileSync(
+      new URL('../modules/diwan-downloader/android/src/main/java/com/diwan/downloader/PinnedEngine.kt', import.meta.url),
+      'utf8',
+    );
+    expect(installer).toContain('const val ASSET_PATH = "diwan-engine/yt-dlp"');
+    expect(installer).toContain('const val VERSION = "2026.08.19"');
+    expect(installer).toContain('const val EXPECTED_SIZE = 3_072_469L');
+    expect(installer).toContain('const val MAX_SIZE = 8L * 1024 * 1024');
+    expect(installer).toContain('const val SHA256 = "1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72ed8d4d6"');
+    expect(installer).toContain('AtomicFile(engine).openRead()');
+    expect(installer).toContain('atomic.startWrite()');
+    expect(installer).toContain('atomic.finishWrite(output)');
+    expect(installer).toContain('atomic.failWrite(output)');
+    expect(installer).toContain('"__main__.py"');
+    expect(installer).toContain('"yt_dlp/version.py"');
+    expect(installer).toContain('"yt_dlp_ejs/yt/solver/core.min.js"');
+    expect(installer).toContain('Regex("""__version__');
+    expect(installer).not.toMatch(/updateYoutubeDL|UpdateChannel|https?:\/\/|browser_download_url/);
+    expect(installer).not.toMatch(/catch\s*\([^)]*Throwable/);
   });
 });
