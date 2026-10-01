@@ -131,7 +131,8 @@ internal open class DownloadStore(private val context: Context) {
           if (!record.publicationReady) TokenPublication.cleanupPartial(target, record)
           cleanupStage(record)
         } catch (_: Exception) {
-          record.errorCode = "E_CLEANUP"
+          // Preserve an existing failure diagnostic; cleanup is retried on the next recovery.
+          if (record.state != "failed" || record.errorCode == null) record.errorCode = "E_CLEANUP"
           save(record)
         }
       } else {

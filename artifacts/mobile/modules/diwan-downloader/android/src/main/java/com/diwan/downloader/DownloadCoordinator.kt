@@ -159,7 +159,9 @@ internal object DownloadCoordinator {
         synchronized(lock) {
           try { s.cleanup(r, keepWitness = s.ownsFinal(r)) }
           catch (e: Exception) {
-            r.errorCode = "E_CLEANUP"
+            android.util.Log.e("DiwanDownloader", "Download cleanup failed")
+            // Keep the first failure's diagnostic; cleanup is retried on recovery/removal regardless.
+            if (r.state != "failed" || r.errorCode == null) r.errorCode = "E_CLEANUP"
             try { s.save(r) } catch (_: Exception) {
               android.util.Log.e("DiwanDownloader", "Cannot persist cleanup failure")
             }
