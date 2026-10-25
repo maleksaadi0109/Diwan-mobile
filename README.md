@@ -49,7 +49,6 @@ The current release is for **Android**. Some features require a custom native bu
 | --- | --- |
 | `artifacts/mobile` | Expo mobile app and native Android modules |
 | `artifacts/api-server` | Audio-processing and video-rendering API |
-| `websites/diwan-website` | Standalone static download website, prepared for a separate repository |
 
 ## Development
 
